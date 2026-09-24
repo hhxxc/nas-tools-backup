@@ -42,17 +42,9 @@ function package_cn_debian {
 function package_update {
 
     if grep -Eqi "Debian" /etc/issue || grep -Eq "Debian" /etc/os-release; then
-        if [ "${NASTOOL_CN_UPDATE}" = "true" ]; then
-            package_list_debian_url=https://ghproxy.com/https://raw.githubusercontent.com/hsuyelin/nas-tools/master/package_list_debian.txt
-        else
-            package_list_debian_url=https://raw.githubusercontent.com/hsuyelin/nas-tools/master/package_list_debian.txt
-        fi
-        if [ ! -f /tmp/package_list_debian.txt ]; then
-            curl -L ${package_list_debian_url} -o /tmp/package_list_debian.txt
-        else
-            rm -rf /tmp/package_list_debian.txt
-            curl -L ${package_list_debian_url} -o /tmp/package_list_debian.txt
-        fi
+        # Taken from the in-image source tree: the old raw.githubusercontent.com
+        # URL pointed at the upstream repository, which no longer exists.
+        cp ${WORKDIR}/package_list_debian.txt /tmp/package_list_debian.txt
         if [ ! -s /tmp/package_list_debian.txt.sha256sum ]; then
             sha256sum /tmp/package_list_debian.txt > /tmp/package_list_debian.txt.sha256sum
         fi

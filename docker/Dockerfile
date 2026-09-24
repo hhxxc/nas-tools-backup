@@ -1,18 +1,23 @@
 FROM python:3.10.11-alpine
+
+# Dependency manifests are copied first so the expensive apk/pip layers stay
+# cached when only application code changes.
+COPY requirements.txt package_list.txt /tmp/deps/
+
 RUN apk add --no-cache --virtual .build-deps \
         libffi-dev \
         gcc \
         musl-dev \
         libxml2-dev \
         libxslt-dev \
-    && apk add --no-cache $(echo $(wget --no-check-certificate -qO- https://raw.githubusercontent.com/hsuyelin/nas-tools/master/package_list.txt)) \
+    && apk add --no-cache $(echo $(cat /tmp/deps/package_list.txt)) \
     && curl https://rclone.org/install.sh | bash \
     && if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi \
     && curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc \
     && chmod +x /usr/bin/mc \
     && pip install --upgrade pip setuptools wheel \
     && pip install cython \
-    && pip install -r https://raw.githubusercontent.com/hsuyelin/nas-tools/master/requirements.txt \
+    && pip install -r /tmp/deps/requirements.txt \
     && apk del --purge .build-deps \
     && rm -rf /tmp/* /root/.cache /var/cache/apk/*
 ENV S6_SERVICES_GRACETIME=30000 \
@@ -29,7 +34,7 @@ ENV S6_SERVICES_GRACETIME=30000 \
     NASTOOL_CN_UPDATE=true \
     NASTOOL_VERSION=master \
     PS1="\u@\h:\w \$ " \
-    REPO_URL="https://github.com/hsuyelin/nas-tools.git" \
+    REPO_URL="https://github.com/hhxxc/nas-tools-backup.git" \
     PYPI_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple" \
     ALPINE_MIRROR="mirrors.ustc.edu.cn" \
     PUID=0 \
@@ -49,9 +54,14 @@ RUN mkdir ${HOME} \
     && echo 'fs.inotify.max_user_instances=5242880' >> /etc/sysctl.conf \
     && echo "nt ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
     && git config --global pull.ff only \
-    && git clone -b master ${REPO_URL} ${WORKDIR} --depth=1 --recurse-submodule \
     && git config --global --add safe.directory ${WORKDIR}
-COPY --chmod=755 ./rootfs /
+
+# Application source, built from this checkout rather than cloned from the
+# network. The .git directory is deliberately included: web/backend/web_utils.py
+# reports the version via `git rev-parse HEAD`.
+COPY . ${WORKDIR}/
+
+COPY --chmod=755 docker/rootfs /
 EXPOSE 3000
 VOLUME ["/config"]
 ENTRYPOINT [ "/init" ]

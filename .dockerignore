@@ -1,0 +1,23 @@
+# Keep the build context small and avoid baking junk into the image.
+# .git is intentionally NOT ignored: the app reports its version from it.
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+
+# local runtime state must never be baked into the image
+config/*.db
+config/*.db-journal
+config/temp
+config/plugins
+
+node_modules
+**/node_modules
+npm-debug.log
+
+# editor / OS noise
+**/.idea
+**/.vscode
+**/.DS_Store
+**/Thumbs.db
