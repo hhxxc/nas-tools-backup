@@ -15,7 +15,11 @@ RUN apk add --no-cache --virtual .build-deps \
     && if [ "$(uname -m)" = "x86_64" ]; then ARCH=amd64; elif [ "$(uname -m)" = "aarch64" ]; then ARCH=arm64; fi \
     && curl https://dl.min.io/client/mc/release/linux-${ARCH}/mc --create-dirs -o /usr/bin/mc \
     && chmod +x /usr/bin/mc \
-    && pip install --upgrade pip setuptools wheel \
+    && pip install --upgrade pip wheel \
+    # setuptools must stay <81: 81 removed the pkg_resources module, which the
+    # cn2an -> proces dependency chain still imports. Upstream's unpinned
+    # `--upgrade setuptools` worked in 2024 but installs 84 today and breaks startup.
+    && pip install "setuptools<81" \
     && pip install cython \
     && pip install -r /tmp/deps/requirements.txt \
     && apk del --purge .build-deps \
