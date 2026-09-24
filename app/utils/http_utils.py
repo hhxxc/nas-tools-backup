@@ -98,8 +98,45 @@ class RequestUtils:
         except requests.exceptions.RequestException:
             return None
 
+    @staticmethod
+    def _fix_jellyfin_auth(url):
+        """Rewrite ?api_key= into an Authorization header (Jellyfin 12.x)."""
+        if not url or "api_key=" not in url:
+            return url, None
+        try:
+            jf_conf = Config().get_config('jellyfin') or {}
+            jf_host = (jf_conf.get('host') or '').strip()
+            if not jf_host:
+                return url, None
+            if not jf_host.startswith('http'):
+                jf_host = 'http://' + jf_host
+            if not jf_host.endswith('/'):
+                jf_host = jf_host + '/'
+            if not url.startswith(jf_host):
+                return url, None
+            from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+            parts = urlsplit(url)
+            api_key = None
+            rest = []
+            for k, v in parse_qsl(parts.query, keep_blank_values=True):
+                if k == 'api_key':
+                    api_key = v
+                else:
+                    rest.append((k, v))
+            if not api_key:
+                return url, None
+            new_url = urlunsplit((parts.scheme, parts.netloc, parts.path,
+                                  urlencode(rest), parts.fragment))
+            return new_url, {"Authorization": 'MediaBrowser Token="%s"' % api_key}
+        except Exception:
+            return url, None
+
     def get_res(self, url, params=None, allow_redirects=True, raise_exception=False):
         try:
+            url, _jf_headers = self._fix_jellyfin_auth(url)
+            if _jf_headers:
+                self._headers = dict(self._headers or {})
+                self._headers.update(_jf_headers)
             if self._session:
                 return self._session.get(url,
                                          params=params,
@@ -125,6 +162,10 @@ class RequestUtils:
 
     def post_res(self, url, data=None, params=None, allow_redirects=True, files=None, json=None):
         try:
+            url, _jf_headers = self._fix_jellyfin_auth(url)
+            if _jf_headers:
+                self._headers = dict(self._headers or {})
+                self._headers.update(_jf_headers)
             if self._session:
                 return self._session.post(url,
                                           data=data,
