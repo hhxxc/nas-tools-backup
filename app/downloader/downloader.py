@@ -1192,6 +1192,32 @@ class Downloader:
         save_path_list.sort()
         return list(set(save_path_list))
 
+    def get_download_dir_types(self, setting=None):
+        """
+        返回下载器中设置的保存目录，按媒体类型归组
+        :return: {"TV": "/xxx/tv", "MOV": "/xxx/movie", "ANIME": "/xxx/anime"}
+        """
+        if not setting:
+            setting = self.default_download_setting_id
+        download_setting = self.get_download_setting(sid=setting)
+        downloader_conf = self.get_downloader_conf(download_setting.get("downloader"))
+        if not downloader_conf:
+            return {}
+        # 下载器里配置的类型是媒体类型名，转为订阅用的短代码
+        type_map = {
+            MediaType.TV.value: "TV",
+            MediaType.MOVIE.value: "MOV",
+            MediaType.ANIME.value: "ANIME",
+        }
+        dir_types = {}
+        for attr in downloader_conf.get("download_dir") or []:
+            save_path = attr.get("save_path")
+            _type = attr.get("type")
+            if not save_path or not _type:
+                continue
+            dir_types.setdefault(type_map.get(_type, _type), save_path)
+        return dir_types
+
     def get_download_visit_dirs(self):
         """
         返回所有下载器中设置的访问目录

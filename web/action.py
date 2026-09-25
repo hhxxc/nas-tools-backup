@@ -1465,28 +1465,36 @@ class WebAction:
         if isinstance(season, list):
             code = 0
             msg = ""
-            for sea in season:
-                code, msg, media_info = _subscribe.add_rss_subscribe(mtype=mtype,
-                                                                     name=name,
-                                                                     year=year,
-                                                                     channel=channel,
-                                                                     keyword=keyword,
-                                                                     season=sea,
-                                                                     fuzzy_match=fuzzy_match,
-                                                                     mediaid=mediaid,
-                                                                     rss_sites=rss_sites,
-                                                                     search_sites=search_sites,
-                                                                     over_edition=over_edition,
-                                                                     filter_restype=filter_restype,
-                                                                     filter_pix=filter_pix,
-                                                                     filter_team=filter_team,
-                                                                     filter_rule=filter_rule,
-                                                                     filter_include=filter_include,
-                                                                     filter_exclude=filter_exclude,
-                                                                     save_path=save_path,
-                                                                     download_setting=download_setting,
-                                                                     rssid=rssid)
-                if code != 0:
+            for index, sea in enumerate(season):
+                ret_code, ret_msg, ret_media = _subscribe.add_rss_subscribe(mtype=mtype,
+                                                                            name=name,
+                                                                            year=year,
+                                                                            channel=channel,
+                                                                            keyword=keyword,
+                                                                            season=sea,
+                                                                            fuzzy_match=fuzzy_match,
+                                                                            mediaid=mediaid,
+                                                                            rss_sites=rss_sites,
+                                                                            search_sites=search_sites,
+                                                                            over_edition=over_edition,
+                                                                            filter_restype=filter_restype,
+                                                                            filter_pix=filter_pix,
+                                                                            filter_team=filter_team,
+                                                                            filter_rule=filter_rule,
+                                                                            filter_include=filter_include,
+                                                                            filter_exclude=filter_exclude,
+                                                                            save_path=save_path,
+                                                                            download_setting=download_setting,
+                                                                            # 只在第一季传入rssid，
+                                                                            # 否则会反复删除同一条订阅
+                                                                            rssid=rssid if index == 0 else None)
+                if ret_media:
+                    media_info = ret_media
+                # 已存在不算失败，继续处理其它季
+                if ret_code == 9:
+                    continue
+                code, msg = ret_code, ret_msg
+                if ret_code != 0:
                     break
         else:
             code, msg, media_info = _subscribe.add_rss_subscribe(mtype=mtype,
@@ -5125,16 +5133,33 @@ class WebAction:
         """
         获取默认订阅设置
         """
-        match data.get("mtype"):
+        mtype = data.get("mtype")
+        match mtype:
             case "TV":
-                default_rss_setting = Subscribe().default_rss_setting_tv
+                default_rss_setting = Subscribe().default_rss_setting_tv or {}
             case "MOV":
-                default_rss_setting = Subscribe().default_rss_setting_mov
+                default_rss_setting = Subscribe().default_rss_setting_mov or {}
             case _:
                 default_rss_setting = {}
-        if default_rss_setting:
-            return {"code": 0, "data": default_rss_setting}
-        return {"code": 1}
+        # 补齐所有字段，避免前端复用同一个弹窗时残留上一次的值
+        setting = {
+            "mtype": mtype,
+            "restype": "",
+            "pix": "",
+            "team": "",
+            "rule": "",
+            "include": "",
+            "exclude": "",
+            "download_setting": "",
+            "over_edition": "0",
+            "rss_sites": [],
+            "search_sites": [],
+        }
+        setting.update(default_rss_setting)
+        # 未设置保存路径时，用下载设置中该类型的目录预填
+        if not setting.get("save_path"):
+            setting["save_path"] = Downloader().get_download_dir_types().get(mtype, "")
+        return {"code": 0, "data": setting}
 
     @staticmethod
     def get_movie_rss_items():

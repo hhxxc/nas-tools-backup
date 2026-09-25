@@ -683,7 +683,7 @@ function add_rss_manual(flag) {
   const name = $("#rss_name").val();
   const year = $("#rss_year").val();
   const keyword = $("#rss_keyword").val();
-  const season = $("#rss_season").val();
+  const season = $("#rss_season").val() || [];
   const fuzzy_match = $("#fuzzy_match").prop("checked");
   const mediaid = $("#rss_tmdbid").val();
   const over_edition = $("#over_edition").prop("checked");
@@ -710,7 +710,7 @@ function add_rss_manual(flag) {
   } else {
     $("#rss_year").removeClass("is-invalid");
   }
-  if (!fuzzy_match && !season && (mtype == "TV" || mtype == "电视剧")) {
+  if (!fuzzy_match && season.length === 0 && (mtype == "TV" || mtype == "电视剧")) {
     $("#rss_season").addClass("is-invalid");
     return;
   } else {
@@ -843,7 +843,7 @@ function show_add_rss_media_modal(mtype) {
   $("#rss_tmdbid").val("");
   $("#fuzzy_match").prop("checked", false);
   $("#over_edition").prop("checked", false);
-  $("#rss_season").val("");
+  $("#rss_season").val([]);
   $("#rss_total_ep").val("");
   $("#rss_current_ep").val("");
   let rss_setting;
@@ -914,6 +914,7 @@ function show_default_rss_setting_modal(mtype) {
       $("#default_rss_setting_exclude").val(ret.data.exclude);
       $("#default_rss_setting_download_setting").val(ret.data.download_setting);
       $("#default_rss_setting_over_edition").val(ret.data.over_edition);
+      $("#default_rss_setting_save_path").val(ret.data.save_path);
       if (ret.data.rss_sites.length === 0) {
         select_SelectALL(false, 'default_rss_sites');
       } else {
@@ -933,6 +934,7 @@ function show_default_rss_setting_modal(mtype) {
       $("#default_rss_setting_exclude").val('');
       $("#default_rss_setting_download_setting").val('');
       $("#default_rss_setting_over_edition").val('0');
+      $("#default_rss_setting_save_path").val('');
       select_SelectALL(false, "default_rss_sites");
       select_SelectALL(false, "default_search_sites");
     }
@@ -981,15 +983,15 @@ function show_edit_rss_media_modal(rssid, type) {
       $("#rss_keyword").val(ret.detail.keyword);
       if (type == "MOV" || type == "电影") {
         $("#rss_tv_season_div").hide();
-        $("#rss_season").val("");
+        $("#rss_season").val([]);
         $("#rss_total_ep").val("");
         $("#rss_current_ep").val("");
       } else {
         $("#rss_tv_season_div").show();
         if (ret.detail.season) {
-          $("#rss_season").val(parseInt(ret.detail.season.replace("S", "")));
+          $("#rss_season").val([String(parseInt(ret.detail.season.replace("S", "")))]);
         } else {
-          $("#rss_season").val("");
+          $("#rss_season").val([]);
         }
         if (ret.detail.total_ep) {
           $("#rss_total_ep").val(ret.detail.total_ep);

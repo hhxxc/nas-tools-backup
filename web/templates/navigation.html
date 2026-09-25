@@ -535,6 +535,16 @@
             </div>
           </div>
         </div>
+        <div class="row">
+          <div class="col-lg">
+            <div class="mb-3">
+              <label class="form-label">保存路径 <span class="form-help"
+                                                       title="默认使用下载设置中该类型的目录，可在此覆盖"
+                                                       data-bs-toggle="tooltip">?</span></label>
+              <input type="text" value="" id="default_rss_setting_save_path" class="form-control" placeholder="自动">
+            </div>
+          </div>
+        </div>
         <div class="row rss_sites_container" id="default_rss_setting_rss_sites_div">
           <div class="mb-3">
               <div class="btn-list">
@@ -599,12 +609,12 @@
           <div class="col-lg-4">
             <div class="mb-3">
               <label class="form-label required">季</label>
-              <select class="form-select" id="rss_season">
-                <option value="" selected>请选择</option>
+              <select class="form-select" id="rss_season" multiple size="6">
                 {% for i in range(1, 51) %}
                   <option value="{{ i }}">第{{ i }}季</option>
                 {% endfor %}
               </select>
+              <div class="form-text">可多选（按住 Ctrl / Cmd 点击）；选中的季共用下面这套订阅设置</div>
             </div>
           </div>
           <div class="col-lg-4">
