@@ -128,7 +128,8 @@ class Subscribe:
         download_setting = int(download_setting) if str(download_setting).replace("-", "").isdigit() else ""
         fuzzy_match = True if fuzzy_match else False
         if channel == RssType.Auto:
-            default_rss_setting = self.default_rss_setting_tv if mtype == MediaType.TV else self.default_rss_setting_mov
+            # 动漫属于剧集，共用电视剧的默认设置，只有电影才走电影的默认设置
+            default_rss_setting = self.default_rss_setting_tv if mtype != MediaType.MOVIE else self.default_rss_setting_mov
             if default_rss_setting:
                 default_restype = default_rss_setting.get('restype')
                 default_pix = default_rss_setting.get('pix')

@@ -1251,14 +1251,17 @@ class Downloader:
         if not media:
             return {"path": None, "category": None}
 
-        def _match(attr, exact_type):
+        def _match(attr, want_type, want_category):
             """
-            判断单条目录配置是否可用；exact_type 决定这一轮只认哪种条目
+            判断单条目录配置是否可用。
+            want_type 为 True 时只认类型精确匹配的条目，为 False 时只认未限定类型的兜底条目；
+            want_category 同理，用于在同类型内再区分二级分类。
             """
             if not attr:
                 return None
             attr_type = attr.get("type")
-            if exact_type:
+            attr_category = attr.get("category")
+            if want_type:
                 # 只认媒体类型与配置类型完全一致的条目
                 if attr_type != media.type.value:
                     return None
@@ -1266,8 +1269,14 @@ class Downloader:
                 # 只认未限定类型的条目，作为兜底
                 if attr_type:
                     return None
-            if attr.get("category") and attr.get("category") != media.category:
-                return None
+            if want_category:
+                # 只认二级分类与媒体分类完全一致的条目
+                if attr_category != (getattr(media, "category", "") or ""):
+                    return None
+            else:
+                # 只认未限定二级分类的条目
+                if attr_category:
+                    return None
             if not attr.get("save_path") and not attr.get("label"):
                 return None
             if (attr.get("container_path") or attr.get("save_path")) \
@@ -1284,14 +1293,15 @@ class Downloader:
                 "category": attr.get("label")
             }
 
-        # 先按媒体类型精确匹配，未限定类型的条目留作兜底。
-        # 否则排在前面的通用目录（type 为空）会一直抢先命中，
-        # 后面按类型配的目录永远用不上。
-        for exact_type in (True, False):
-            for attr in downloaddir or []:
-                info = _match(attr, exact_type)
-                if info:
-                    return info
+        # 匹配优先级：类型+二级分类 > 仅类型 > 仅二级分类 > 兜底。
+        # 必须逐级降级，否则同类型下排在前面的通用目录（category 为空）会一直抢先命中，
+        # 后面按二级分类细分的目录永远用不上。
+        for want_type in (True, False):
+            for want_category in (True, False):
+                for attr in downloaddir or []:
+                    info = _match(attr, want_type, want_category)
+                    if info:
+                        return info
         return {"path": None, "category": None}
 
     @staticmethod
