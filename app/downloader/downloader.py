@@ -1248,29 +1248,50 @@ class Downloader:
         """
         根据媒体信息读取一个下载目录的信息
         """
-        if media:
+        if not media:
+            return {"path": None, "category": None}
+
+        def _match(attr, exact_type):
+            """
+            判断单条目录配置是否可用；exact_type 决定这一轮只认哪种条目
+            """
+            if not attr:
+                return None
+            attr_type = attr.get("type")
+            if exact_type:
+                # 只认媒体类型与配置类型完全一致的条目
+                if attr_type != media.type.value:
+                    return None
+            else:
+                # 只认未限定类型的条目，作为兜底
+                if attr_type:
+                    return None
+            if attr.get("category") and attr.get("category") != media.category:
+                return None
+            if not attr.get("save_path") and not attr.get("label"):
+                return None
+            if (attr.get("container_path") or attr.get("save_path")) \
+                    and os.path.exists(attr.get("container_path") or attr.get("save_path")) \
+                    and media.size \
+                    and SystemUtils.get_free_space(
+                attr.get("container_path") or attr.get("save_path")
+            ) < NumberUtils.get_size_gb(
+                StringUtils.num_filesize(media.size)
+            ):
+                return None
+            return {
+                "path": attr.get("save_path"),
+                "category": attr.get("label")
+            }
+
+        # 先按媒体类型精确匹配，未限定类型的条目留作兜底。
+        # 否则排在前面的通用目录（type 为空）会一直抢先命中，
+        # 后面按类型配的目录永远用不上。
+        for exact_type in (True, False):
             for attr in downloaddir or []:
-                if not attr:
-                    continue
-                if attr.get("type") and attr.get("type") != media.type.value:
-                    continue
-                if attr.get("category") and attr.get("category") != media.category:
-                    continue
-                if not attr.get("save_path") and not attr.get("label"):
-                    continue
-                if (attr.get("container_path") or attr.get("save_path")) \
-                        and os.path.exists(attr.get("container_path") or attr.get("save_path")) \
-                        and media.size \
-                        and SystemUtils.get_free_space(
-                    attr.get("container_path") or attr.get("save_path")
-                ) < NumberUtils.get_size_gb(
-                    StringUtils.num_filesize(media.size)
-                ):
-                    continue
-                return {
-                    "path": attr.get("save_path"),
-                    "category": attr.get("label")
-                }
+                info = _match(attr, exact_type)
+                if info:
+                    return info
         return {"path": None, "category": None}
 
     @staticmethod
