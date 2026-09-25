@@ -2712,12 +2712,29 @@ class WebAction:
             title_season = MetaInfo(title=title).begin_season
         else:
             title_season = None
-        if not str(tmdbid).isdigit():
-            media_info = WebUtils.get_mediainfo_from_id(mtype=MediaType.TV,
-                                                        mediaid=tmdbid)
-            season_infos = Media().get_tmdb_tv_seasons(media_info.tmdb_info)
-        else:
-            season_infos = Media().get_tmdb_tv_seasons_byid(tmdbid=tmdbid)
+        season_infos = []
+        # 按标题查到的TMDBID，返回给前端回填订阅表单，
+        # 保证「下拉里显示的季」和「提交时解析的剧」是同一部
+        resolved_tmdbid = ""
+        if tmdbid:
+            if str(tmdbid).isdigit():
+                season_infos = Media().get_tmdb_tv_seasons_byid(tmdbid=tmdbid)
+                resolved_tmdbid = str(tmdbid)
+            else:
+                media_info = WebUtils.get_mediainfo_from_id(mtype=MediaType.TV,
+                                                            mediaid=tmdbid)
+                if media_info and media_info.tmdb_info:
+                    season_infos = Media().get_tmdb_tv_seasons(media_info.tmdb_info)
+                    resolved_tmdbid = str(media_info.tmdb_id)
+        elif title:
+            # 新增订阅时只有标题，先按标题查到TMDB信息再取季
+            media_info = Media().get_media_info(title=title,
+                                                mtype=MediaType.TV,
+                                                strict=False,
+                                                cache=False)
+            if media_info and media_info.tmdb_info:
+                season_infos = Media().get_tmdb_tv_seasons(media_info.tmdb_info)
+                resolved_tmdbid = str(media_info.tmdb_id)
         if title_season:
             seasons = [
                 {
@@ -2733,7 +2750,7 @@ class WebAction:
                 }
                 for season in season_infos
             ]
-        return {"code": 0, "seasons": seasons}
+        return {"code": 0, "seasons": seasons, "tmdbid": resolved_tmdbid}
 
     @staticmethod
     def __get_userrss_task(data):

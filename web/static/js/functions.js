@@ -830,6 +830,51 @@ function remove_rss_manual(type, name, year, rssid) {
   remove_rss_media(name, year, type, rssid, page);
 }
 
+// 组装季查询用的标题（带年份，帮助TMDB区分同名剧）
+function rss_season_query_title() {
+  const name = ($("#rss_name").val() || "").trim();
+  const year = ($("#rss_year").val() || "").trim();
+  if (!name) {
+    return "";
+  }
+  return year ? `${name} ${year}` : name;
+}
+
+// 按实际季数填充季选择框
+function refresh_rss_season_options(tmdbid, title, selected = []) {
+  const SEASON_SELECT = $("#rss_season");
+  const SEASON_HELP = $("#rss_season_help");
+  if (!tmdbid && !title) {
+    SEASON_SELECT.empty();
+    SEASON_HELP.text("填写标题后自动加载季信息；可多选（按住 Ctrl / Cmd 点击）");
+    return;
+  }
+  ajax_post("get_tvseason_list", {tmdbid: tmdbid, title: title}, function (ret) {
+    if (ret.code !== 0 || !ret.seasons || ret.seasons.length === 0) {
+      SEASON_SELECT.empty();
+      SEASON_HELP.text("未查询到季信息，请确认标题或年份是否正确");
+      return;
+    }
+    // 按标题解析时回填TMDBID，提交时按ID解析，
+    // 避免同名剧（如纸牌屋 1990 / 2013）在两条路径上解析成不同的剧。
+    // 编辑场景传的是ID、没有标题，此时不要覆盖
+    if (ret.tmdbid && title) {
+      $("#rss_tmdbid").val(ret.tmdbid);
+    }
+    let content = "";
+    for (let season of ret.seasons) {
+      content += `<option value="${season.num}">${season.text}</option>`;
+    }
+    SEASON_SELECT.empty().append(content);
+    SEASON_SELECT.val(selected.map(String));
+    if (ret.seasons.length > 1) {
+      SEASON_HELP.text("共 " + ret.seasons.length + " 季，可多选（按住 Ctrl / Cmd 点击）；选中的季共用下面这套订阅设置");
+    } else {
+      SEASON_HELP.text("共 1 季；选中的季共用下面这套订阅设置");
+    }
+  });
+}
+
 // 新增订阅
 function show_add_rss_media_modal(mtype) {
   // 刷新下拉框
@@ -847,9 +892,23 @@ function show_add_rss_media_modal(mtype) {
   $("#rss_total_ep").val("");
   $("#rss_current_ep").val("");
   let rss_setting;
+  // 每次打开都先解绑，避免切到电影后 TV 的回调仍挂在同一输入框上
+  $("#rss_name").off("blur.rssseason");
+  $("#rss_year").off("blur.rssseason");
   if (mtype === "TV") {
     $("#rss_type").val("TV");
     $("#rss_tv_season_div").show();
+    // 季列表按实际季数加载，标题或年份变化时重新查询
+    refresh_rss_season_options("", "", []);
+    $("#rss_name").on("blur.rssseason", function () {
+      // 标题变了就清掉上一次解析的ID，强制按新标题重查
+      $("#rss_tmdbid").val("");
+      refresh_rss_season_options("", rss_season_query_title(), []);
+    });
+    $("#rss_year").on("blur.rssseason", function () {
+      $("#rss_tmdbid").val("");
+      refresh_rss_season_options("", rss_season_query_title(), []);
+    });
     rss_setting = localStorage.getItem("RssSettingTV");
   } else if (mtype === "MOV") {
     $("#rss_type").val("MOV");
@@ -865,8 +924,7 @@ function show_add_rss_media_modal(mtype) {
     $("#rss_include").val(rss_setting.filter_include);
     $("#rss_exclude").val(rss_setting.filter_exclude);
     $("#rss_download_setting").val(rss_setting.download_setting);
-    refresh_savepath_select('rss_save_path', false, rss_setting.download_setting);
-    check_manual_input_path("rss_save_path", "rss_save_path_manual", rss_setting.save_path);
+    refresh_savepath_select('rss_save_path', false, rss_setting.download_setting, false, "", rss_setting.save_path);
     if (rss_setting.search_sites.length === 0) {
       select_SelectALL(true, 'search_sites');
     } else {
@@ -977,22 +1035,24 @@ function show_edit_rss_media_modal(rssid, type) {
   // 获取订阅信息
   ajax_post("rss_detail", {"rssid": rssid, "rsstype": type}, function (ret) {
     if (ret.code === 0) {
+      // 编辑时标题只读，不需要按标题重查季
+      $("#rss_name").off("blur.rssseason");
+      $("#rss_year").off("blur.rssseason");
       $("#rss_tmdbid").val(ret.detail.tmdbid);
       $("#rss_name").val(ret.detail.name).attr("readonly", true);
       $("#rss_year").val(ret.detail.year).attr("readonly", true);
       $("#rss_keyword").val(ret.detail.keyword);
       if (type == "MOV" || type == "电影") {
         $("#rss_tv_season_div").hide();
-        $("#rss_season").val([]);
+        $("#rss_season").empty();
         $("#rss_total_ep").val("");
         $("#rss_current_ep").val("");
       } else {
         $("#rss_tv_season_div").show();
-        if (ret.detail.season) {
-          $("#rss_season").val([String(parseInt(ret.detail.season.replace("S", "")))]);
-        } else {
-          $("#rss_season").val([]);
-        }
+        // 按TMDBID加载该剧的全部季，并选中已订阅的季
+        // （不传标题，避免剧名里带季号时被误解析成只显示一季）
+        refresh_rss_season_options(ret.detail.tmdbid, "",
+            ret.detail.season ? [parseInt(ret.detail.season.replace("S", ""))] : []);
         if (ret.detail.total_ep) {
           $("#rss_total_ep").val(ret.detail.total_ep);
         } else {
@@ -1023,8 +1083,7 @@ function show_edit_rss_media_modal(rssid, type) {
       $("#rss_include").val(ret.detail.filter_include);
       $("#rss_exclude").val(ret.detail.filter_exclude);
       $("#rss_download_setting").val(ret.detail.download_setting);
-      refresh_savepath_select('rss_save_path', false, ret.detail.download_setting);
-      check_manual_input_path("rss_save_path", "rss_save_path_manual", ret.detail.save_path);
+      refresh_savepath_select('rss_save_path', false, ret.detail.download_setting, false, "", ret.detail.save_path);
       if (ret.detail.rss_sites.length === 0) {
         select_SelectALL(true, 'rss_sites');
       } else {
@@ -1141,15 +1200,23 @@ function refresh_site_options(obj_id, show_all = false) {
 }
 
 // 刷新保存路径
-function refresh_savepath_select(obj_id, aync = true, sid = "", is_default = false, site = "") {
+function refresh_savepath_select(obj_id, aync = true, sid = "", is_default = false, site = "", manual_path = null) {
   let savepath_select = $(`#${obj_id}`);
   let savepath_input_manual = $(`#${obj_id}_manual`);
   let savepath_select_content = `<option value="" selected>自动</option>`;
-  if (!sid && !is_default && !site) {
-    savepath_select_content += `<option value="manual">--手动输入--</option>`;
+  // 重建 option 后回填上次选择，必须在 option 就绪之后做，
+  // 否则 val() 设不上值，会误判成“手动输入”
+  const apply = () => {
     savepath_select.empty().append(savepath_select_content);
     savepath_input_manual.hide();
     savepath_select.show();
+    if (manual_path !== null) {
+      check_manual_input_path(obj_id, `${obj_id}_manual`, manual_path);
+    }
+  };
+  if (!sid && !is_default && !site) {
+    savepath_select_content += `<option value="manual">--手动输入--</option>`;
+    apply();
   } else {
     ajax_post("get_download_dirs", {sid: sid, site: site}, function (ret) {
       if (ret.code === 0) {
@@ -1157,9 +1224,7 @@ function refresh_savepath_select(obj_id, aync = true, sid = "", is_default = fal
           savepath_select_content += `<option value="${path}">${path}</option>`;
         }
         savepath_select_content += `<option value="manual">--手动输入--</option>`;
-        savepath_select.empty().append(savepath_select_content);
-        savepath_input_manual.hide();
-        savepath_select.show();
+        apply();
       }
     }, aync);
   }

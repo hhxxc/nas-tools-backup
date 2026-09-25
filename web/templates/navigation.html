@@ -610,11 +610,8 @@
             <div class="mb-3">
               <label class="form-label required">季</label>
               <select class="form-select" id="rss_season" multiple size="6">
-                {% for i in range(1, 51) %}
-                  <option value="{{ i }}">第{{ i }}季</option>
-                {% endfor %}
               </select>
-              <div class="form-text">可多选（按住 Ctrl / Cmd 点击）；选中的季共用下面这套订阅设置</div>
+              <div class="form-text" id="rss_season_help">可多选（按住 Ctrl / Cmd 点击）；选中的季共用下面这套订阅设置</div>
             </div>
           </div>
           <div class="col-lg-4">
