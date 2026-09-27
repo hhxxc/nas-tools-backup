@@ -3787,7 +3787,8 @@ class WebAction:
             return []
         SearchSourceType = data.get("searchtype")
         medias = WebUtils.search_media_infos(keyword=SearchWord,
-                                             source=SearchSourceType)
+                                             source=SearchSourceType,
+                                             deep=True)
 
         return {"code": 0, "result": [media.to_dict() for media in medias]}
 

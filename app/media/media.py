@@ -20,6 +20,11 @@ from config import Config, KEYWORD_BLACKLIST, KEYWORD_SEARCH_WEIGHT_3, KEYWORD_S
 
 
 class Media:
+    # 深度搜索最多翻多少页TMDB（每页20条）
+    DEEP_SEARCH_MAX_PAGES = 5
+    # 深度搜索最多返回多少条，避免前端列表过长
+    DEEP_SEARCH_MAX_RESULTS = 40
+
     # TheMovieDB
     tmdb = None
     search = None
@@ -617,9 +622,10 @@ class Media:
                     tmdb_info['name'] = cn_title
         return tmdb_info
 
-    def get_tmdb_infos(self, title, year=None, mtype: MediaType = None, language=None, page=1):
+    def get_tmdb_infos(self, title, year=None, mtype: MediaType = None, language=None, page=1, deep=False):
         """
         查询名称中有关键字的所有的TMDB信息并返回
+        :param deep: 深度搜索，翻页直到找到与关键字完全同名的条目或翻完所有页
         """
         if not self.tmdb:
             log.error("【Meta】TMDB API Key 未设置！")
@@ -628,64 +634,111 @@ class Media:
             return []
         # 设置语言
         self.__set_language(language)
-        if not mtype and not year:
-            results = self.__search_multi_tmdbinfos(title)
-        else:
-            if not mtype:
-                results = list(
-                    set(self.__search_movie_tmdbinfos(title, year)).union(set(self.__search_tv_tmdbinfos(title, year))))
-                # 组合结果的情况下要排序
-                results = sorted(results,
-                                 key=lambda x: x.get("release_date") or x.get("first_air_date") or "0000-00-00",
-                                 reverse=True)
-            elif mtype == MediaType.MOVIE:
-                results = self.__search_movie_tmdbinfos(title, year)
-            else:
-                results = self.__search_tv_tmdbinfos(title, year)
-        return results[(page - 1) * 20:page * 20]
+        if deep:
+            return self.__search_tmdb_infos_deep(title, year, mtype, page)
+        return self.__search_tmdb_infos(title, year, mtype, page)
 
-    def __search_multi_tmdbinfos(self, title):
+    def __search_tmdb_infos(self, title, year, mtype, page):
+        """
+        按关键字查询一页TMDB信息
+        """
+        if not mtype and not year:
+            return self.__search_multi_tmdbinfos(title, page)
+        if not mtype:
+            results = list(
+                set(self.__search_movie_tmdbinfos(title, year, page)).union(
+                    set(self.__search_tv_tmdbinfos(title, year, page))))
+            # 组合结果的情况下要排序
+            return sorted(results,
+                          key=lambda x: x.get("release_date") or x.get("first_air_date") or "0000-00-00",
+                          reverse=True)
+        if mtype == MediaType.MOVIE:
+            return self.__search_movie_tmdbinfos(title, year, page)
+        return self.__search_tv_tmdbinfos(title, year, page)
+
+    def __search_tmdb_infos_deep(self, title, year, mtype, page):
+        """
+        深度搜索：TMDB 按热度排序，片名短且为常见词时（如「特工」）精确同名的条目
+        会被挤到很后面，只查第一页必然漏掉。这里逐页翻直到出现同名条目，
+        并把同名条目提到最前面。
+        """
+        results = []
+        seen = set()
+        for cur_page in range(page, page + self.DEEP_SEARCH_MAX_PAGES):
+            page_results = self.__search_tmdb_infos(title, year, mtype, cur_page)
+            if not page_results:
+                break
+            fresh = 0
+            for result in page_results:
+                tmdb_id = result.get("id")
+                if tmdb_id in seen:
+                    continue
+                seen.add(tmdb_id)
+                results.append(result)
+                fresh += 1
+            # 本页没有新条目说明已经翻到底
+            if not fresh:
+                break
+            # 找到同名条目就不用再翻了
+            if any(self.__is_same_title(result, title) for result in page_results):
+                break
+        # 同名条目置顶（stable sort 保持其余原有顺序）
+        results.sort(key=lambda x: 0 if self.__is_same_title(x, title) else 1)
+        return results[:self.DEEP_SEARCH_MAX_RESULTS]
+
+    @staticmethod
+    def __is_same_title(media_info, title):
+        """
+        判断TMDB条目名称是否与关键字完全同名（忽略大小写和特殊字符）
+        """
+        name = media_info.get("title") or media_info.get("name") or ""
+        if not name:
+            return False
+        return StringUtils.handler_special_chars(name).strip().lower() == \
+            StringUtils.handler_special_chars(title).strip().lower()
+
+    def __search_multi_tmdbinfos(self, title, page=1):
         """
         同时查询模糊匹配的电影、电视剧TMDB信息
         """
         if not title:
             return []
         ret_infos = []
-        multis = self.search.multi({"query": title}) or []
+        multis = self.search.multi({"query": title, "page": page}) or []
         for multi in multis:
             if multi.get("media_type") in ["movie", "tv"]:
                 multi['media_type'] = MediaType.MOVIE if multi.get("media_type") == "movie" else MediaType.TV
                 ret_infos.append(multi)
         return ret_infos
 
-    def __search_movie_tmdbinfos(self, title, year):
+    def __search_movie_tmdbinfos(self, title, year, page=1):
         """
         查询模糊匹配的所有电影TMDB信息
         """
         if not title:
             return []
         ret_infos = []
+        params = {"query": title, "page": page}
         if year:
-            movies = self.search.movies({"query": title, "year": year}) or []
-        else:
-            movies = self.search.movies({"query": title}) or []
+            params["year"] = year
+        movies = self.search.movies(params) or []
         for movie in movies:
             if title in movie.get("title"):
                 movie['media_type'] = MediaType.MOVIE
                 ret_infos.append(movie)
         return ret_infos
 
-    def __search_tv_tmdbinfos(self, title, year):
+    def __search_tv_tmdbinfos(self, title, year, page=1):
         """
         查询模糊匹配的所有电视剧TMDB信息
         """
         if not title:
             return []
         ret_infos = []
+        params = {"query": title, "page": page}
         if year:
-            tvs = self.search.tv_shows({"query": title, "first_air_date_year": year}) or []
-        else:
-            tvs = self.search.tv_shows({"query": title}) or []
+            params["first_air_date_year"] = year
+        tvs = self.search.tv_shows(params) or []
         for tv in tvs:
             if title in tv.get("name"):
                 tv['media_type'] = MediaType.TV

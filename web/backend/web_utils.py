@@ -128,13 +128,14 @@ class WebUtils:
         return media_info
 
     @staticmethod
-    def search_media_infos(keyword, source=None, page=1):
+    def search_media_infos(keyword, source=None, page=1, deep=False):
         """
         搜索TMDB或豆瓣词条
         :param: keyword 关键字
         :param: source 渠道 tmdb/douban
         :param: season 季号
         :param: episode 集号
+        :param: deep 深度搜索，翻页直到找到同名条目（仅第一页生效）
         """
         if not keyword:
             return []
@@ -156,7 +157,8 @@ class WebUtils:
             tmdbinfos = Media().get_tmdb_infos(title=meta_info.get_name(),
                                                year=meta_info.year,
                                                mtype=mtype,
-                                               page=page)
+                                               page=page,
+                                               deep=deep and page == 1)
             medias = []
             for tmdbinfo in tmdbinfos:
                 tmp_info = MetaInfo(title=keyword)
