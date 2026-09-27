@@ -65,7 +65,7 @@ class MTeamTorrentUserInfo(_ISiteUserInfo):
             },
             proxies=proxies,
             timeout=30
-        ).post_res(url=site_url)
+        ).post_res(url=site_url, json={})
         if res and res.status_code == 200:
             msg = res.json().get('message')
             if msg != "SUCCESS":
@@ -111,7 +111,7 @@ class MTeamTorrentUserInfo(_ISiteUserInfo):
             },
             proxies=proxies,
             timeout=30
-        ).post_res(url=site_url)
+        ).post_res(url=site_url, json={})
         if res and res.status_code == 200:
             msg = res.json().get('message')
             if msg != "SUCCESS":
