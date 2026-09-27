@@ -201,12 +201,12 @@ class WebUtils:
         """
         带缓存的请求
         """
-        if url.find('douban'):
+        if 'douban' in url:
             ret = RequestUtils(referer="https://movie.douban.com").get_res(url)
         else:
-            ret = RequestUtils().get_res(url)
+            ret = RequestUtils(proxies=Config().get_proxies()).get_res(url)
         if ret:
             return ret.content
-        
+
         # 避免 lru 缓存失败的情况，exception 不会被缓存
         raise Exception('request failed')
