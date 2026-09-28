@@ -15,3 +15,7 @@ nastools_test.py
 /node_modules/**
 package-lock.json
 package.json
+# session scratch (debug helpers, not project code)
+_*.py
+_*.sh
+_*.txt
