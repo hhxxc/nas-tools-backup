@@ -1,0 +1,24 @@
+fix(site/downloader): 适配 M-Team 新接口与 qBittorrent 5.x
+
+两个「连不上」的根因：
+
+1. M-Team 站点维护连不上（mteam_torrent.py）
+   M-Team 现在要求 POST 必须带 JSON body，不带会返回
+   {"code":1,"message":"請求參數錯誤"}。sysRoleList 和 profile
+   两处调用都补上 json={}。
+   实测：不带 body -> 請求參數錯誤；带 json={} -> SUCCESS + 22 个角色。
+
+2. qBittorrent 5.x 无法登录（requirements）
+   qbittorrent-api 2023.9.53 判断登录成功的条件是
+   auth_response.text != "Ok."，而 qBittorrent 5.1.2 之后改为返回
+   空 body（失败则 401/403），因此恒定抛 LoginFailed。
+   升级到 2026.8.1，它同时兼容空 body 和旧的 Ok./Fails 两种响应。
+
+   实测三个实例全部通过（13/14 项 API 检查通过，唯一失败项是
+   测试用的无效 hash，属预期）：
+     8085-套件  qB v5.2.2  OK
+     8465-馒头  qB v4.6.5  OK
+     7149-iyuu  qB v4.1.9  OK
+
+   附带确认：NASTool 用到的 torrents_pause / torrents_resume 在新版中
+   仍作为 torrents_stop / torrents_start 的别名保留，无需改调用方。
