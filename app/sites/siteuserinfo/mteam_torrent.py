@@ -10,6 +10,20 @@ from app.apis import MTeamApi
 
 g_sys_role_list = []
 
+
+def _to_int(value):
+    """
+    M-Team 的角色字段早期返回整数，后来改成浮点字符串（如 "2.0"），
+    个别字段甚至可能为空，这里统一做兼容转换。
+    """
+    if value is None or value == "":
+        return 0
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 # 系统角色
 class MTeamSysRole(object):
     _id = ""
@@ -80,13 +94,13 @@ class MTeamTorrentUserInfo(_ISiteUserInfo):
                 sysrole._nameEng = result.get("nameEng")
                 sysrole._image = result.get("image")
                 sysrole._color = result.get("color")
-                sysrole._readAccess = int(result.get("readAccess"))
-                sysrole._classUp = int(result.get("classUp"))
-                sysrole._registerWeek = int(result.get("registerWeek"))
-                sysrole._downloaded = int(result.get("downloaded"))
-                sysrole._shareRate = int(result.get("shareRate"))
-                sysrole._shareRateLimit = int(result.get("shareRateLimit"))
-                sysrole._sortPoint = int(result.get("sortPoint"))
+                sysrole._readAccess = _to_int(result.get("readAccess"))
+                sysrole._classUp = _to_int(result.get("classUp"))
+                sysrole._registerWeek = _to_int(result.get("registerWeek"))
+                sysrole._downloaded = _to_int(result.get("downloaded"))
+                sysrole._shareRate = _to_int(result.get("shareRate"))
+                sysrole._shareRateLimit = _to_int(result.get("shareRateLimit"))
+                sysrole._sortPoint = _to_int(result.get("sortPoint"))
                 g_sys_role_list.append(sysrole)
             log.info(f"【MTeamUserInfo】 获取馒头系统角色成功，共有{len(g_sys_role_list)}个角色")
         elif res is not None:
