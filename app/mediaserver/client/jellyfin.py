@@ -319,6 +319,10 @@ class Jellyfin(_IMediaClient):
         # 没有季默认为和1季
         if not season:
             season = 1
+        # 剧中不在媒体库时无法判断缺集，返回 None 让调用方回退到文件系统检查。
+        # 否则 get_tv_episodes 会返回 []，被当成「一集都没有」而误判为全部缺失。
+        if not self.__get_jellyfin_series_id_by_name(meta_info.title, meta_info.year):
+            return None
         exists_episodes = self.get_tv_episodes(title=meta_info.title,
                                                year=meta_info.year,
                                                tmdb_id=meta_info.tmdb_id,
