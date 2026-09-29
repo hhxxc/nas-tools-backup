@@ -104,6 +104,8 @@ class ChromeHelper(object):
     def visit(self, url, ua=None, apikey=None, cookie=None, timeout=30, proxy=None):
         self._proxy = proxy
         if not self.browser:
+            log.error("【Chrome】浏览器实例创建失败，executable_path=%s, chrome_available=%s"
+                      % (self._executable_path, uc.find_chrome_executable() is not None))
             return False
         try:
             if ua:
@@ -120,7 +122,8 @@ class ChromeHelper(object):
                 self._chrome.get(url)
             return True
         except Exception as err:
-            print(str(err))
+            log.error("【Chrome】访问页面失败 url=%s, error=%s" % (url, str(err)))
+            ExceptionUtils.exception_traceback(err)
             return False
 
     def new_tab(self, url, ua=None, apikey=None, cookie=None):

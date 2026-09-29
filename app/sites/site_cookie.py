@@ -68,8 +68,15 @@ class SiteCookie(object):
         chrome = ChromeHelper()
         if not chrome.get_status():
             return None, None, "需要浏览器内核环境才能更新站点信息"
+        # 先用HTTP探测站点连通性
+        http_check = RequestUtils().get_res(url)
+        if http_check is None:
+            log.error("【Sites】站点不可达(HTTP) url=%s" % url)
+            return None, None, "站点不可达，请检查网络连接或站点地址：{url}".format(url=url)
+        log.info("【Sites】站点HTTP连通正常(%d)，开始Chrome访问" % http_check.status_code)
         if not chrome.visit(url=url, proxy=proxy):
-            return None, None, "Chrome模拟访问失败"
+            log.error("【Sites】Chrome模拟访问失败 url=%s，请检查容器内Chrome/chromedriver环境" % url)
+            return None, None, "Chrome模拟访问失败，请查看容器日志排查(可能原因: chromedriver不匹配/内存不足/站点被拦截)"
         # 循环检测是否过cf
         cloudflare = chrome.pass_cloudflare()
         if not cloudflare:
