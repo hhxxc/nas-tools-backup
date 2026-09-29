@@ -147,17 +147,34 @@ class SiteCookie(object):
                 if captcha_xpath:
                     captcha_element = chrome.browser.find_element(By.XPATH, captcha_xpath)
                     if captcha_element.is_displayed():
+                        captcha = None
                         code_url = self.__get_captcha_url(url, captcha_img_url)
                         if ocrflag:
-                            # 自动OCR识别验证码
-                            captcha = self.get_captcha_text(chrome, code_url)
-                            if captcha:
-                                log.info("【Sites】验证码地址为：%s，识别结果：%s" % (code_url, captcha))
-                            else:
-                                return None, None, "验证码识别失败"
-                        else:
-                            # 等待用户输入
-                            captcha = None
+                            # 自动OCR识别验证码，失败时刷新图片重试（最多3次）
+                            max_retries = 3
+                            for attempt in range(max_retries):
+                                captcha = self.get_captcha_text(chrome, code_url)
+                                if captcha:
+                                    log.info("【Sites】验证码地址为：%s，第%d次识别结果：%s" % (code_url, attempt + 1, captcha))
+                                    break
+                                log.warn("【Sites】验证码第%d次识别失败，尝试刷新重试" % (attempt + 1))
+                                if attempt < max_retries - 1:
+                                    # 刷新验证码图片
+                                    try:
+                                        captcha_img_element = chrome.browser.find_element(By.XPATH, login_conf.get("captcha_img")[0])
+                                        if captcha_img_element:
+                                            captcha_img_element.click()
+                                            time.sleep(1)
+                                            # 更新验证码图片URL（页面可能动态更新）
+                                            new_img_src = captcha_img_element.get_attribute("src")
+                                            if new_img_src:
+                                                code_url = new_img_src
+                                    except Exception as refresh_err:
+                                        log.warn("【Sites】刷新验证码失败：%s" % str(refresh_err))
+                            if not captcha:
+                                log.warn("【Sites】OCR连续%d次识别失败，回退到手动输入" % max_retries)
+                        if not captcha:
+                            # OCR未开启或全部重试失败 → 等待用户手动输入
                             code_key = StringUtils.generate_random_str(5)
                             for sec in range(30, 0, -1):
                                 if self.get_code(code_key):
