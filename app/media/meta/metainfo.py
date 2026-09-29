@@ -86,6 +86,7 @@ def MetaInfo(title,
     meta_info.offset_words = global_used_info.get("offset")
     
     # 为了正确应用识别词，我们再次生成一遍 MetaInfo
+    file_media_info = None
     if not tmdb_id:
         from app.media import Media
         file_media_info = Media().get_tmdb_info_by_meta_info(meta_info=meta_info)
