@@ -339,6 +339,22 @@ class Plex(_IMediaClient):
             ExceptionUtils.exception_traceback(err)
         return "", ""
 
+    @staticmethod
+    def __infer_library_type(name, paths):
+        """
+        根据库名称/路径智能推断媒体库类型，用于 type 非标准时的兜底
+        """
+        name_lower = (name or "").lower()
+        paths_lower = " ".join((p or "").lower() for p in (paths or []))
+        combined = f"{name_lower} {paths_lower}"
+        if any(kw in combined for kw in ["movie", "film", "电影"]):
+            return MediaType.MOVIE.value
+        if any(kw in combined for kw in ["anime", "动画", "动漫"]):
+            return MediaType.ANIME.value
+        if any(kw in combined for kw in ["tv", "show", "电视", "剧集", "series"]):
+            return MediaType.TV.value
+        return MediaType.UNKNOWN.value
+
     def get_libraries(self):
         """
         获取媒体服务器所有媒体库列表
@@ -359,8 +375,11 @@ class Plex(_IMediaClient):
                 case "show":
                     library_type = MediaType.TV.value
                     image_list_str = self.get_libraries_image(library.key, 2)
-                case _:
-                    continue
+                case unknown_type:
+                    library_type = self.__infer_library_type(library.title, library.locations)
+                    image_list_str = ""
+                    log.warn(f"【{self.client_name}】媒体库 {library.title} 的 type 为 {unknown_type}，"
+                             f"无法识别，推断类型为：{library_type}，Paths: {library.locations}")
             libraries.append({
                 "id": library.key,
                 "name": library.title,

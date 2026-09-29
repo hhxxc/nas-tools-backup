@@ -567,6 +567,22 @@ class Emby(_IMediaClient):
         # 刷新根目录
         return "/"
 
+    @staticmethod
+    def __infer_library_type(name, path):
+        """
+        根据库名称/路径智能推断媒体库类型，用于 CollectionType 非标准时的兜底
+        """
+        name_lower = (name or "").lower()
+        path_lower = (path or "").lower()
+        combined = f"{name_lower} {path_lower}"
+        if any(kw in combined for kw in ["movie", "film", "电影"]):
+            return MediaType.MOVIE.value
+        if any(kw in combined for kw in ["anime", "动画", "动漫"]):
+            return MediaType.ANIME.value
+        if any(kw in combined for kw in ["tv", "show", "电视", "剧集", "series"]):
+            return MediaType.TV.value
+        return MediaType.UNKNOWN.value
+
     def get_libraries(self):
         """
         获取媒体服务器所有媒体库列表
@@ -580,8 +596,10 @@ class Emby(_IMediaClient):
                     library_type = MediaType.MOVIE.value
                 case "tvshows":
                     library_type = MediaType.TV.value
-                case _:
-                    continue
+                case unknown_type:
+                    library_type = self.__infer_library_type(library.get("Name"), library.get("Path"))
+                    log.warn(f"【{self.client_name}】媒体库 {library.get('Name')} 的 CollectionType 为 {unknown_type}，"
+                             f"无法识别，推断类型为：{library_type}，Path: {library.get('Path')}")
             image = self.get_local_image_by_id(library.get("Id"), remote=False, inner=True)
             libraries.append({
                 "id": library.get("Id"),
