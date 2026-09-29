@@ -222,7 +222,8 @@ class Media:
                 log.debug(
                     f"【Meta】正在识别{search_type.value}：{file_media_name}, 年份={StringUtils.xstr(first_media_year)} ...")
                 info = self.__search_tv_by_name(file_media_name,
-                                                first_media_year)
+                                                first_media_year,
+                                                season_number=season_number)
             if info:
                 info['media_type'] = MediaType.TV
                 log.info("【Meta】%s 识别到 电视剧：TMDBID=%s, 名称=%s, 首播日期=%s" % (
@@ -295,15 +296,16 @@ class Media:
                         break
         return {}
 
-    def __search_tv_by_name(self, file_media_name, first_media_year):
+    def __search_tv_by_name(self, file_media_name, first_media_year, season_number=None):
         """
         根据名称查询电视剧TMDB匹配
         :param file_media_name: 识别的文件名或者种子名
         :param first_media_year: 电视剧的首播年份
+        :param season_number: 季号，有传入时按「该剧第N季的播出年」匹配，而不是首播年
         :return: 匹配的媒体信息
         """
         try:
-            if first_media_year:
+            if first_media_year and not season_number:
                 tvs = self.search.tv_shows({"query": file_media_name, "first_air_date_year": first_media_year})
             else:
                 tvs = self.search.tv_shows({"query": file_media_name})
@@ -321,13 +323,18 @@ class Media:
             info = {}
             if first_media_year:
                 for tv in tvs:
-                    if tv.get('first_air_date'):
-                        if self.__compare_tmdb_names(file_media_name, tv.get('name')) \
-                                and tv.get('first_air_date')[0:4] == str(first_media_year):
-                            return tv
-                        if self.__compare_tmdb_names(file_media_name, tv.get('original_name')) \
-                                and tv.get('first_air_date')[0:4] == str(first_media_year):
-                            return tv
+                    if not self.__compare_tmdb_names(file_media_name, tv.get('name')) \
+                            and not self.__compare_tmdb_names(file_media_name, tv.get('original_name')):
+                        continue
+                    if season_number:
+                        # 季集场景：标题里的年份是「该季的播出年份」，不是首播年，
+                        # 拿它比 first_air_date 会选中同名的其它剧集（如 The 100 Jokes）。
+                        tv_full = self.get_tmdb_info(mtype=MediaType.TV, tmdbid=tv.get("id"))
+                        if self.__is_tv_season_air_year(tv_full, first_media_year, season_number):
+                            return tv_full
+                    elif tv.get('first_air_date') \
+                            and tv.get('first_air_date')[0:4] == str(first_media_year):
+                        return tv
             else:
                 for tv in tvs:
                     if self.__compare_tmdb_names(file_media_name, tv.get('name')) \
@@ -337,13 +344,15 @@ class Media:
                 index = 0
                 for tv in tvs:
                     if first_media_year:
-                        if not tv.get('first_air_date'):
-                            continue
-                        if tv.get('first_air_date')[0:4] != str(first_media_year):
-                            continue
                         index += 1
                         info, names = self.__search_tmdb_allnames(MediaType.TV, tv.get("id"))
-                        if self.__compare_tmdb_names(file_media_name, names):
+                        if not self.__compare_tmdb_names(file_media_name, names):
+                            continue
+                        if season_number:
+                            if self.__is_tv_season_air_year(info, first_media_year, season_number):
+                                return info
+                        elif tv.get('first_air_date') \
+                                and tv.get('first_air_date')[0:4] == str(first_media_year):
                             return info
                     else:
                         index += 1
@@ -354,6 +363,45 @@ class Media:
                         break
         return {}
 
+    @staticmethod
+    def __is_tv_season_air_year(tv_info, media_year, season_number):
+        """
+        判断某部剧的第N季是否在 media_year 年播出
+
+        种子标题里的年份是「该季的播出年份」（如 'The 100 S03 2016'），
+        对第一季之后的季，它与 first_air_date（首播年）并不相同，
+        所以必须查该剧对应季的 air_date 来比对，不能用首播年。
+        :param tv_info: TMDB 的剧集详情
+        :param media_year: 季的播出年份
+        :param season_number: 季序号
+        :return: 是否命中
+        """
+        if not tv_info or not media_year or not season_number:
+            return False
+        try:
+            season_num = int(season_number)
+            target = None
+            for season in Media.get_tmdb_tv_seasons(tv_info=tv_info):
+                if season.get("season_number") is None:
+                    continue
+                try:
+                    if int(season.get("season_number")) == season_num:
+                        target = season
+                        break
+                except (TypeError, ValueError):
+                    continue
+            air_date = (target or {}).get("air_date")
+            if not air_date and season_num == 1:
+                # 第一季的播出年就是首播年：缺该季 air_date 时用首播年兜底，
+                # 避免因 TMDB 数据缺失把本来能识别的资源拒掉。
+                air_date = tv_info.get("first_air_date")
+            if not air_date:
+                return False
+            return str(air_date)[0:4] == str(media_year)
+        except Exception as e1:
+            log.error(f"【Meta】连接TMDB出错：{e1}")
+            return False
+
     def __search_tv_by_season(self, file_media_name, media_year, season_number):
         """
         根据电视剧的名称和季的年份及序号匹配TMDB
@@ -362,22 +410,6 @@ class Media:
         :param season_number: 季序号
         :return: 匹配的媒体信息
         """
-
-        def __season_match(tv_info, season_year):
-            if not tv_info:
-                return False
-            try:
-                seasons = self.get_tmdb_tv_seasons(tv_info=tv_info)
-                for season in seasons:
-                    if season.get("air_date") and season.get("season_number"):
-                        if season.get("air_date")[0:4] == str(season_year) \
-                                and season.get("season_number") == int(season_number):
-                            return True
-            except Exception as e1:
-                log.error(f"【Meta】连接TMDB出错：{e1}")
-                return False
-            return False
-
         try:
             tvs = self.search.tv_shows({"query": file_media_name})
         except TMDbException as err:
@@ -392,16 +424,20 @@ class Media:
             return {}
         else:
             for tv in tvs:
-                if (self.__compare_tmdb_names(file_media_name, tv.get('name'))
-                    or self.__compare_tmdb_names(file_media_name, tv.get('original_name'))) \
-                        and (tv.get('first_air_date') and tv.get('first_air_date')[0:4] == str(media_year)):
-                    return tv
+                if not (self.__compare_tmdb_names(file_media_name, tv.get('name'))
+                        or self.__compare_tmdb_names(file_media_name, tv.get('original_name'))):
+                    continue
+                # 名称相符的候选，按「该剧第N季的播出年」确认，
+                # 避免选中同名的其它剧集（如第一季年份撞上 The 100 Jokes）
+                tv_full = self.get_tmdb_info(mtype=MediaType.TV, tmdbid=tv.get("id"))
+                if self.__is_tv_season_air_year(tv_full, media_year, season_number):
+                    return tv_full
 
             for tv in tvs[:5]:
                 info, names = self.__search_tmdb_allnames(MediaType.TV, tv.get("id"))
                 if not self.__compare_tmdb_names(file_media_name, names):
                     continue
-                if __season_match(tv_info=info, season_year=media_year):
+                if self.__is_tv_season_air_year(info, media_year, season_number):
                     return info
         return {}
 

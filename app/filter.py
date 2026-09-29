@@ -237,7 +237,11 @@ class Filter:
                 e_num = [e_num]
             if not set(e_num).issuperset(set(media_info.get_episode_list())):
                 return False
-        if year_str:
+        # 剧集场景（s_num 非空）不再比较年份：订阅/检索传入的 year_str 是剧的
+        # 首播年，而 media_info.year 是种子标题里解析出的「该季播出年份」，
+        # 对第一季之后的季二者必然不等（如 The 100 S04 2017 vs 首播 2014）。
+        # 季号已在上方校验，年份对剧集是冗余项，比对会把整季包全部挡掉。
+        if year_str and not s_num:
             if str(media_info.year) != str(year_str):
                 return False
         return True
