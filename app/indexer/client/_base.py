@@ -198,12 +198,26 @@ class _IIndexClient(metaclass=ABCMeta):
                                 continue
                             # TMDBID是否匹配
                             if str(media_info.tmdb_id) != str(match_media.tmdb_id):
-                                log.info(
-                                    f"【{self.client_name}】{torrent_name} 识别为 "
-                                    f"{media_info.type.value}/{media_info.get_title_string()}/{media_info.tmdb_id} "
-                                    f"与 {match_media.type.value}/{match_media.get_title_string()}/{match_media.tmdb_id} 不匹配")
-                                index_match_fail += 1
-                                continue
+                                # TMDB 上同一部剧可能被拆成多条记录（如米奇妙妙屋
+                                # 3934/300847），而正确那条没有英文名，英文标题的种子
+                                # 永远只能命中另一条。此时若能确认是同一个订阅目标则放行。
+                                if self.filter.is_tmdb_duplicate_of_match(
+                                        media_info=media_info,
+                                        match_media=match_media,
+                                        s_num=filter_args.get("season")):
+                                    log.info(
+                                        f"【{self.client_name}】{torrent_name} 识别为 "
+                                        f"{media_info.type.value}/{media_info.get_title_string()}/"
+                                        f"{media_info.tmdb_id} 系订阅目标 "
+                                        f"{match_media.get_title_string()}/{match_media.tmdb_id} "
+                                        f"在TMDB上的重复条目，按同一目标处理")
+                                else:
+                                    log.info(
+                                        f"【{self.client_name}】{torrent_name} 识别为 "
+                                        f"{media_info.type.value}/{media_info.get_title_string()}/{media_info.tmdb_id} "
+                                        f"与 {match_media.type.value}/{match_media.get_title_string()}/{match_media.tmdb_id} 不匹配")
+                                    index_match_fail += 1
+                                    continue
                             # 合并媒体数据
                             media_info = self.media.merge_media_info(media_info, match_media)
                     # 过滤类型

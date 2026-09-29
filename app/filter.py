@@ -9,6 +9,38 @@ from app.utils.commons import singleton
 from app.utils.types import MediaType
 
 
+def _get_tv_names(tv_info):
+    """
+    取 TMDB 剧集信息里的名称集合（原名与译名）
+    """
+    if not tv_info:
+        return set()
+    names = set()
+    for key in ("name", "original_name", "title", "original_title"):
+        val = tv_info.get(key)
+        if isinstance(val, str) and val.strip():
+            names.add(val.strip())
+    return names
+
+
+def _get_tv_season_numbers(tv_info):
+    """
+    取 TMDB 剧集信息里的季号集合
+    """
+    if not tv_info:
+        return set()
+    nums = set()
+    for season in tv_info.get("seasons") or []:
+        num = season.get("season_number")
+        if num is None:
+            continue
+        try:
+            nums.add(int(num))
+        except (TypeError, ValueError):
+            continue
+    return nums
+
+
 @singleton
 class Filter:
     rg_matcher = None
@@ -245,6 +277,69 @@ class Filter:
             if str(media_info.year) != str(year_str):
                 return False
         return True
+
+    @staticmethod
+    def is_tmdb_duplicate_of_match(media_info, match_media, s_num):
+        """
+        判断识别到的媒体信息是否为订阅目标在 TMDB 上的重复条目。
+
+        TMDB 上存在同一部剧被拆成多条记录的情况：「米奇妙妙屋」有 3934 与 300847 两条，
+        名称与首播日完全相同，而 300847 连英文名都没有 —— 英文标题的种子永远只能命中
+        3934。订阅登记的是 300847 时，识别结果与订阅 id 必然不等，按 id 严格相等校验会
+        把该剧的资源全部挡掉（实测馒头站 42 条、有效 0 条）。
+
+        判定条件（需同时成立）：
+        1. 订阅目标含有请求的全部季；
+        2. 种子自身声明了请求的季 —— 用于排除「简介里恰好提到该剧、但其实与季无关」的
+           电影种子。真正属于该剧的种子（含被误判成电影的）标题里就有季号；
+        3. 剧集候选必须与目标同名（同一条目的另一份记录）。同名但不同条目会被排除：
+           `The 100 Jokes`（153917）与目标 `The 100`（48866）名称不相交，`米奇妙妙屋+`
+           与 `米奇妙妙屋` 也不相交，仍按不匹配拒绝，不会把 adbe555 修好的场景重新放开；
+        4. 种子名称或简介里能对上订阅目标的名称。
+        :param media_info: 种子识别出的媒体信息
+        :param match_media: 订阅登记的目标媒体信息
+        :param s_num: 请求的季号或季号列表
+        :return: 是否应判定为同一个订阅目标
+        """
+        if not media_info or not match_media:
+            return False
+        # 目标必须是剧集且已登记 tmdbid
+        if match_media.type == MediaType.MOVIE or not match_media.tmdb_id:
+            return False
+        if not s_num:
+            return False
+        if not isinstance(s_num, list):
+            s_num = [s_num]
+        try:
+            wanted = {int(s) for s in s_num}
+        except (TypeError, ValueError):
+            return False
+        if not wanted:
+            return False
+        # 条件1：订阅目标含有请求的季
+        if not wanted.issubset(_get_tv_season_numbers(match_media.tmdb_info)):
+            return False
+        # 条件2：种子自身声明了请求的季
+        try:
+            declared = {int(s) for s in media_info.get_season_list()}
+        except (TypeError, ValueError):
+            return False
+        if not wanted.issubset(declared):
+            return False
+        # 条件3：剧集候选必须与目标同名（同一条目的另一份记录）
+        if media_info.type != MediaType.MOVIE:
+            target_names = _get_tv_names(match_media.tmdb_info)
+            cand_names = _get_tv_names(media_info.tmdb_info)
+            if not target_names or not cand_names:
+                return False
+            if not (target_names & cand_names):
+                return False
+        # 条件4：种子文本里能对上订阅目标的名称
+        text = "%s %s" % (media_info.org_string or "", media_info.subtitle or "")
+        for name in (match_media.title, match_media.original_title):
+            if name and name in text:
+                return True
+        return False
 
     def check_torrent_filter(self,
                              meta_info,
