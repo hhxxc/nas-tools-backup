@@ -1,4 +1,5 @@
 import base64
+import re
 import time
 
 from lxml import etree
@@ -13,6 +14,7 @@ from app.sites.sites import Sites
 from app.utils import StringUtils, RequestUtils, ExceptionUtils
 from app.utils.commons import singleton
 from app.utils.types import ProgressKey
+from config import Config
 
 
 @singleton
@@ -68,13 +70,17 @@ class SiteCookie(object):
         chrome = ChromeHelper()
         if not chrome.get_status():
             return None, None, "需要浏览器内核环境才能更新站点信息"
-        # 先用HTTP探测站点连通性
-        http_check = RequestUtils().get_res(url)
+        # HTTP预检只用于区分「网络/代理不通」和「Chrome环境问题」，不能据此中止流程：
+        # 预检必须与 Chrome 走同一条代理，且站点可能只对浏览器放行，
+        # 探测失败时 Chrome 仍可能成功，直接返回会把可用链路判死。
+        http_check = RequestUtils(proxies=Config().get_proxies() if proxy else None).get_res(url)
         if http_check is None:
-            log.error("【Sites】站点不可达(HTTP) url=%s" % url)
-            return None, None, "站点不可达，请检查网络连接或站点地址：{url}".format(url=url)
-        log.info("【Sites】站点HTTP连通正常(%d)，开始Chrome访问" % http_check.status_code)
+            log.warn("【Sites】站点HTTP预检未通过 url=%s，继续尝试Chrome访问" % url)
+        else:
+            log.info("【Sites】站点HTTP连通正常(%d)，开始Chrome访问" % http_check.status_code)
         if not chrome.visit(url=url, proxy=proxy):
+            if http_check is None:
+                return None, None, "站点不可达：HTTP预检与Chrome访问均失败，请检查网络/代理/站点地址：{url}".format(url=url)
             log.error("【Sites】Chrome模拟访问失败 url=%s，请检查容器内Chrome/chromedriver环境" % url)
             return None, None, "Chrome模拟访问失败，请查看容器日志排查(可能原因: chromedriver不匹配/内存不足/站点被拦截)"
         # 循环检测是否过cf
@@ -120,10 +126,12 @@ class SiteCookie(object):
                 break
         # 查找验证码图片
         captcha_img_url = None
+        captcha_img_xpath = None
         if captcha_xpath:
             for xpath in login_conf.get("captcha_img"):
                 if html.xpath(xpath):
                     captcha_img_url = html.xpath(xpath)[0]
+                    captcha_img_xpath = xpath
                     break
             if not captcha_img_url:
                 return None, None, "未找到验证码图片"
@@ -159,6 +167,9 @@ class SiteCookie(object):
                         if ocrflag:
                             # 自动OCR识别验证码，失败时刷新图片重试（最多3次）
                             max_retries = 3
+                            # captcha_img 的 xpath 以 /@src 结尾（lxml 取属性用），
+                            # WebDriver 定位元素必须去掉该后缀，否则抛 InvalidSelector
+                            img_element_xpath = re.sub(r"/@[^/]+$", "", captcha_img_xpath or "")
                             for attempt in range(max_retries):
                                 captcha = self.get_captcha_text(chrome, code_url)
                                 if captcha:
@@ -166,16 +177,14 @@ class SiteCookie(object):
                                     break
                                 log.warn("【Sites】验证码第%d次识别失败，尝试刷新重试" % (attempt + 1))
                                 if attempt < max_retries - 1:
-                                    # 刷新验证码图片
+                                    # 点击图片刷新，并取回新的 src 作为下一次识别的地址
                                     try:
-                                        captcha_img_element = chrome.browser.find_element(By.XPATH, login_conf.get("captcha_img")[0])
-                                        if captcha_img_element:
-                                            captcha_img_element.click()
-                                            time.sleep(1)
-                                            # 更新验证码图片URL（页面可能动态更新）
-                                            new_img_src = captcha_img_element.get_attribute("src")
-                                            if new_img_src:
-                                                code_url = new_img_src
+                                        captcha_img_element = chrome.browser.find_element(By.XPATH, img_element_xpath)
+                                        captcha_img_element.click()
+                                        time.sleep(1)
+                                        new_img_src = captcha_img_element.get_attribute("src")
+                                        if new_img_src:
+                                            code_url = self.__get_captcha_url(url, new_img_src)
                                     except Exception as refresh_err:
                                         log.warn("【Sites】刷新验证码失败：%s" % str(refresh_err))
                             if not captcha:
@@ -254,6 +263,8 @@ class SiteCookie(object):
         """
         if not siteurl or not imageurl:
             return ""
+        if imageurl.startswith("http"):
+            return imageurl
         if imageurl.startswith("/"):
             imageurl = imageurl[1:]
         return "%s/%s" % (StringUtils.get_base_url(siteurl), imageurl)
