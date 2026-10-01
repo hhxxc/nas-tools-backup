@@ -14,6 +14,7 @@ from app.utils import RequestUtils, StringUtils
 from config import Config
 from web.backend.pro_user import ProUser
 from app.indexer.indexerConf import IndexerConf
+import json
 import re
 
 class CookieCloudRunResult:
@@ -332,6 +333,22 @@ class CookieCloud(_IPluginModule):
     def get_state(self):
         return self._enabled and self._cron
 
+    @staticmethod
+    def __cookie_domains(content_list):
+        """
+        取这组 Cookie 自身携带的完整域名（去 www、去前导点），按长度倒序，
+        用于在内置索引器登记的是子域名时做兜底匹配。
+        """
+        domains = []
+        for content in content_list:
+            domain = str(content.get("domain") or "").lstrip(".").lower()
+            if domain.startswith("www."):
+                domain = domain[4:]
+            if domain and domain not in domains:
+                domains.append(domain)
+        domains.sort(key=len, reverse=True)
+        return domains
+
     def __get_current_date_str(self):
         """
         获取当前日期字符串，格式为：2023-08-03 19:00:00
@@ -439,19 +456,32 @@ class CookieCloud(_IPluginModule):
                     update_count += 1
             else:
                 # 查询是否在索引器范围
-                indexer_conf = self._user.get_indexer(url=domain_url)
+                # 上面的分组只取了根域名，而内置索引器可能登记的是子域名
+                # （如 pt.btschool.club、u2.dmhy.org），精确匹配会失败，
+                # 所以先按根域名查，失败再用 Cookie 自身的完整域名逐个重试。
+                indexer_conf = None
+                for probe in [domain_url] + self.__cookie_domains(content_list):
+                    indexer_conf = self._user.get_indexer(url=probe)
+                    if isinstance(indexer_conf, IndexerConf):
+                        break
                 indexer_info = None
                 if isinstance(indexer_conf, IndexerConf):
                     indexer_info = indexer_conf.to_dict()
                 if indexer_info:
                     # 支持则新增站点
                     site_pri = self.sites.get_max_site_pri() + 1
+                    # 索引器定义里要求走代理的站点，一并写进站点备注，
+                    # 否则站点记录的 proxy 会覆盖索引器定义导致无法连通
+                    site_note = None
+                    if indexer_info.get("proxy"):
+                        site_note = json.dumps({"proxy": "Y"}, ensure_ascii=False)
                     self.sites.add_site(
                         name=indexer_info.get("name"),
                         site_pri=site_pri,
                         signurl=indexer_info.get("domain"),
                         cookie=cookie_str,
-                        rss_uses='T'
+                        rss_uses='T',
+                        note=site_note
                     )
                     add_count += 1
         # 发送消息
