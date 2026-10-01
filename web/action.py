@@ -951,7 +951,7 @@ class WebAction:
                 dest = transinfo.DEST
                 dest_path = transinfo.DEST_PATH
                 dest_filename = transinfo.DEST_FILENAME
-                if flag in ["del_source", "del_all"]:
+                if flag in ["del_source", "del_all", "del_all_torrent"]:
                     # 删除源文件
                     del_flag, del_msg = self.delete_media_file(source_path, source_filename)
                     if not del_flag:
@@ -964,7 +964,7 @@ class WebAction:
                             "path": source_path,
                             "filename": source_filename
                         })
-                if flag in ["del_dest", "del_all"]:
+                if flag in ["del_dest", "del_all", "del_all_torrent"]:
                     # 删除媒体库文件
                     if dest_path and dest_filename:
                         del_flag, del_msg = self.delete_media_file(dest_path, dest_filename)
@@ -1044,7 +1044,51 @@ class WebAction:
                                     shutil.rmtree(os.path.dirname(dest_path))
                                 except Exception as e:
                                     ExceptionUtils.exception_traceback(e)
+                if flag == "del_all_torrent":
+                    # 同步移除下载器中的下载任务
+                    self.delete_history_torrents(transinfo)
         return {"retcode": 0}
+
+    @staticmethod
+    def delete_history_torrents(transinfo):
+        """
+        历史记录删除时，同步移除下载器中对应的下载任务
+
+        按标题取出下载历史里的下载任务，逐个核对下载器中的文件确实与被删源文件
+        对应后才移除任务，避免误删同名种子。下载器未配置或任务已不存在时跳过。
+        """
+        title = transinfo.TITLE
+        if not title:
+            return
+        source_file = os.path.normpath(os.path.join(transinfo.SOURCE_PATH or "",
+                                                    transinfo.SOURCE_FILENAME or ""))
+        _downloader = Downloader()
+        for info in _downloader.get_download_history_by_title(title=title):
+            if not info.DOWNLOADER or not info.DOWNLOAD_ID:
+                continue
+            try:
+                dl_files = _downloader.get_files(tid=info.DOWNLOAD_ID,
+                                                 downloader_id=info.DOWNLOADER)
+                if not dl_files:
+                    continue
+                delete_flag = False
+                for dl_file in dl_files:
+                    dl_file_name = dl_file.get("name")
+                    if dl_file_name and source_file.endswith(os.path.normpath(dl_file_name)):
+                        delete_flag = True
+                        break
+                if delete_flag:
+                    log.info("【History】删除下载任务：%s - %s" % (info.DOWNLOADER, info.DOWNLOAD_ID))
+                    # 只移除下载任务本身，不删下载器里的文件 —— 被删文件已由
+                    # delete_media_file 精确删除，若让下载器连带删文件，遇到整季包
+                    # 会把同包里其它未被删除的集数一起抹掉。
+                    _downloader.delete_torrents(downloader_id=info.DOWNLOADER,
+                                                ids=info.DOWNLOAD_ID,
+                                                delete_file=False)
+            except Exception as e:
+                log.error("【History】删除下载任务 %s - %s 失败：%s" % (
+                    info.DOWNLOADER, info.DOWNLOAD_ID, str(e)))
+                ExceptionUtils.exception_traceback(e)
 
     @staticmethod
     def delete_media_file(filedir, filename):

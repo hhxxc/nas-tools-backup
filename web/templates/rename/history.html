@@ -38,6 +38,9 @@
               <a class="dropdown-item text-danger" href="javascript:batch_check_action('del_all')" >
                 删除源及媒体库文件
               </a>
+              <a class="dropdown-item text-danger" href="javascript:batch_check_action('del_all_torrent')" >
+                删除源及媒体库文件并删种
+              </a>
             </div>
           </div>
           <a href="javascript:truncate_history()"
@@ -183,6 +186,10 @@
                              href='javascript:single_delete_history("del_all", "{{ History.ID }}", "{{ History.TITLE }} ({{ History.YEAR }}) {{ History.SEASON_EPISODE }}")'>
                             删除源及媒体库文件
                           </a>
+                          <a class="dropdown-item text-danger"
+                             href='javascript:single_delete_history("del_all_torrent", "{{ History.ID }}", "{{ History.TITLE }} ({{ History.YEAR }}) {{ History.SEASON_EPISODE }}")'>
+                            删除源及媒体库文件并删种
+                          </a>
                         </div>
                       </div>
                     </td>
@@ -245,7 +252,9 @@
   //删除
   function delete_history(flag, logids, name) {
     let msg = "";
-    if (flag === 'del_all') {
+    if (flag === 'del_all_torrent') {
+      msg = '源文件、媒体库及下载器任务';
+    } else if (flag === 'del_all') {
       msg = '源文件及媒体库';
     } else if (flag === 'del_source') {
       msg = '源';
