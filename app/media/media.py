@@ -136,6 +136,55 @@ class Media:
                 return True
         return False
 
+    @staticmethod
+    def __normalize_name_for_compare(name):
+        """
+        归一化媒体名称用于跨格式比较（罗马字/英文/日文别名等）
+        去除日文助词、空格、标点，合并为连续字符串以便子串匹配
+        :param name: 原始名称
+        :return: 归一化后的纯字母数字字符串（小写）
+        """
+        if not name:
+            return ""
+        # 对非纯ASCII名称不做归一化（日文假名、中文等保留原样）
+        if not re.match(r'^[a-zA-Z0-9\s.:_\-\']+$', name):
+            return ""
+        # 去除常见日文助词（作为独立单词出现时），处理罗马字标题
+        particles = {'ga', 'no', 'to', 'wa', 'wo', 'ni', 'de', 'he', 'ha', 'mo', 'ka', 'ya'}
+        words = name.lower().split()
+        filtered = [w for w in words if w not in particles]
+        joined = ''.join(filtered)
+        # 去除所有非字母数字字符
+        return re.sub(r'[^a-z0-9]', '', joined)
+
+    def __compare_tmdb_names_fuzzy(self, file_name, tmdb_names):
+        """
+        模糊名称比较，处理罗马字名、缩写名等精确比较无法覆盖的场景
+        归一化后检查子串包含关系，如 "Tsuki ga Michibiku..." → "tsukimichibiku..."
+        包含 TMDB 别名 "Tsukimichi" → "tsukimichi"
+        :param file_name: 文件名
+        :param tmdb_names: TMDB 返回的名称（字符串或列表）
+        :return: True 表示模糊匹配成功
+        """
+        if not file_name or not tmdb_names:
+            return False
+        if not isinstance(tmdb_names, list):
+            tmdb_names = [tmdb_names]
+        norm_file = self.__normalize_name_for_compare(file_name)
+        if not norm_file or len(norm_file) < 5:
+            return False
+        for tmdb_name in tmdb_names:
+            if not tmdb_name:
+                continue
+            norm_tmdb = self.__normalize_name_for_compare(tmdb_name)
+            if not norm_tmdb or len(norm_tmdb) < 5:
+                continue
+            # 归一化后检查子串包含（任一方向）
+            if norm_tmdb in norm_file or norm_file in norm_tmdb:
+                log.debug(f"【Meta】名称模糊匹配成功: '{file_name}' ≈ '{tmdb_name}'")
+                return True
+        return False
+
     def __search_tmdb_allnames(self, mtype: MediaType, tmdb_id):
         """
         搜索tmdb中所有的标题和译名，用于名称匹配
@@ -294,6 +343,17 @@ class Media:
                             return info
                     if index > 5:
                         break
+            # 名称模糊匹配兜底（罗马字、缩写名等非标准名称）
+            if not info:
+                for movie in movies:
+                    if first_media_year:
+                        if not movie.get('release_date'):
+                            continue
+                        if movie.get('release_date')[0:4] != str(first_media_year):
+                            continue
+                    movie_info, movie_names = self.__search_tmdb_allnames(MediaType.MOVIE, movie.get("id"))
+                    if self.__compare_tmdb_names_fuzzy(file_media_name, movie_names):
+                        return movie_info
         return {}
 
     def __search_tv_by_name(self, file_media_name, first_media_year, season_number=None):
@@ -361,6 +421,20 @@ class Media:
                             return info
                     if index > 5:
                         break
+            # 名称模糊匹配兜底（罗马字、缩写名等非标准名称）
+            if not info:
+                for tv in tvs:
+                    tv_info, tv_names = self.__search_tmdb_allnames(MediaType.TV, tv.get("id"))
+                    if self.__compare_tmdb_names_fuzzy(file_media_name, tv_names):
+                        if season_number:
+                            if self.__is_tv_season_air_year(tv_info, first_media_year, season_number):
+                                return tv_info
+                        elif first_media_year:
+                            if tv.get('first_air_date') \
+                                    and tv.get('first_air_date')[0:4] == str(first_media_year):
+                                return tv_info
+                        else:
+                            return tv_info
         return {}
 
     @staticmethod
@@ -439,6 +513,13 @@ class Media:
                     continue
                 if self.__is_tv_season_air_year(info, media_year, season_number):
                     return info
+            # 名称模糊匹配兜底（罗马字、缩写名等非标准名称）
+            if not info:
+                for tv in tvs[:5]:
+                    tv_info, tv_names = self.__search_tmdb_allnames(MediaType.TV, tv.get("id"))
+                    if self.__compare_tmdb_names_fuzzy(file_media_name, tv_names):
+                        if self.__is_tv_season_air_year(tv_info, media_year, season_number):
+                            return tv_info
         return {}
 
     def __search_multi_tmdb(self, file_media_name):
@@ -480,6 +561,19 @@ class Media:
                         tv_info, names = self.__search_tmdb_allnames(MediaType.TV, multi.get("id"))
                         if self.__compare_tmdb_names(file_media_name, names):
                             info = tv_info
+            # 名称模糊匹配兜底（罗马字、缩写名等非标准名称）
+            if not info:
+                for multi in multis[:5]:
+                    if multi.get("media_type") == "movie":
+                        movie_info, movie_names = self.__search_tmdb_allnames(MediaType.MOVIE, multi.get("id"))
+                        if self.__compare_tmdb_names_fuzzy(file_media_name, movie_names):
+                            info = movie_info
+                            break
+                    elif multi.get("media_type") == "tv":
+                        tv_info, tv_names = self.__search_tmdb_allnames(MediaType.TV, multi.get("id"))
+                        if self.__compare_tmdb_names_fuzzy(file_media_name, tv_names):
+                            info = tv_info
+                            break
         # 返回
         if info:
             info['media_type'] = MediaType.MOVIE if info.get('media_type') in ['movie',
