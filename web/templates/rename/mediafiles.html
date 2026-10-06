@@ -1,0 +1,370 @@
+{% import 'macro/svg.html' as SVG %}
+<div class="container-xl">
+  <div class="page-header d-print-none">
+    <div class="row align-items-center">
+      <div class="col">
+        <h2 class="page-title">
+          媒体文件
+        </h2>
+        <div class="text-muted mt-1">
+          对照媒体库（Jellyfin 播放的链接）与下载目录里的源文件，按 inode 判定是否同一份数据
+        </div>
+      </div>
+      <div class="col-auto ms-auto d-print-none">
+        <div class="btn-list">
+          <a href="javascript:refresh_index()" class="btn btn-primary ms-auto">
+            {{ SVG.refresh() }}
+            重新扫描
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row row-deck row-cards mb-3 mediafile-summary-card">
+    <div class="col-sm-6 col-lg-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="mediafile-summary-value text-green" id="summary_reclaimable">-</div>
+          <div class="mediafile-summary-label">可释放空间</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="mediafile-summary-value" id="summary_linked">-</div>
+          <div class="mediafile-summary-label">已关联（删单端不释放）</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="mediafile-summary-value text-yellow" id="summary_orphan">-</div>
+          <div class="mediafile-summary-label">孤儿链接（源已丢失）</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card">
+        <div class="card-body">
+          <div class="mediafile-summary-value text-red" id="summary_unlinked">-</div>
+          <div class="mediafile-summary-label">未入库（源端无链接）</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label">状态</label>
+          <select class="form-select" id="filter_status" onchange="render_table()">
+            <option value="">全部</option>
+            <option value="orphan">仅孤儿链接（可释放）</option>
+            <option value="unlinked">仅未入库（可释放）</option>
+            <option value="linked">仅已关联</option>
+            <option value="reclaimable">仅可释放（孤儿 + 未入库）</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">库</label>
+          <select class="form-select" id="filter_lib" onchange="render_table()">
+            <option value="">全部</option>
+            <option value="/volume3/videos/link/movie/">电影</option>
+            <option value="/volume3/videos/link/tv/">电视剧</option>
+            <option value="/volume3/videos/link/anime/">动漫</option>
+            <option value="/volume3/videos/link/animation/">儿童动画</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">搜索</label>
+          <input type="text" class="form-control" id="filter_search" placeholder="文件名 / 路径关键字"
+                 oninput="render_table()">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-vcenter card-table table-hover table-striped">
+        <thead>
+        <tr>
+          <th class="w-1">
+            <input class="form-check-input m-0 align-middle" type="checkbox" aria-label="全选"
+                   onclick="select_SelectALL($(this).prop('checked'), 'mediafile_item')">
+          </th>
+          <th>名称</th>
+          <th style="width: 9rem;">大小</th>
+          <th>媒体库（Jellyfin）</th>
+          <th>源文件（下载目录）</th>
+          <th style="width: 9rem;">状态</th>
+          <th class="w-1"></th>
+        </tr>
+        </thead>
+        <tbody id="mediafile_table_body">
+        </tbody>
+      </table>
+    </div>
+    <div class="card-footer d-flex align-items-center">
+      <div class="text-muted" id="mediafile_table_count">加载中...</div>
+      <div class="btn-list ms-auto">
+        <label class="form-check mb-0 me-3" title="勾选后同时从下载器移除对应任务，只摘任务不删下载器数据">
+          <input class="form-check-input" type="checkbox" id="opt_remove_torrent">
+          <span class="form-check-label">同时删种</span>
+        </label>
+        <div class="dropdown">
+          <a href="#" class="btn btn-danger dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+            {{ SVG.trash() }}
+            批量删除
+          </a>
+          <div class="dropdown-menu dropdown-menu-end">
+            <a class="dropdown-item text-danger" href="javascript:batch_delete('del_lib')">
+              只删媒体库文件（不释放空间）
+            </a>
+            <a class="dropdown-item text-danger" href="javascript:batch_delete('del_src')">
+              只删源文件（不释放空间）
+            </a>
+            <a class="dropdown-item text-danger" href="javascript:batch_delete('del_both')">
+              两端都删（真正释放空间）
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal modal-blur fade" id="modal-mediafile-result" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">删除结果</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="mediafile_result_body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary ms-auto" data-bs-dismiss="modal">知道了</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script id="mediafile_row_template" type="text/html">
+<tr>
+  <td>
+    <input class="form-check-input m-0 align-middle" name="mediafile_item" type="checkbox" value="{IDX}">
+  </td>
+  <td>
+    <div class="fw-medium mediafile-name" title="{NAME}">{SHORT_NAME}</div>
+  </td>
+  <td class="text-muted">{FILESIZE}</td>
+  <td>
+    <div class="mediafile-path">{LIB}</div>
+  </td>
+  <td>
+    <div class="mediafile-path">{SRC}</div>
+  </td>
+  <td>{STATUS_BADGE}</td>
+  <td>
+    <div class="dropdown">
+      <a class="btn-action" data-bs-toggle="dropdown" aria-expanded="false">
+        {{ SVG.dots_vertical() }}
+      </a>
+      <div class="dropdown-menu dropdown-menu-end">
+        <a class="dropdown-item text-danger" href="javascript:single_delete({IDX}, 'del_lib')">只删媒体库文件</a>
+        <a class="dropdown-item text-danger" href="javascript:single_delete({IDX}, 'del_src')">只删源文件</a>
+        <a class="dropdown-item text-danger" href="javascript:single_delete({IDX}, 'del_both')">两端都删（释放空间）</a>
+      </div>
+    </div>
+  </td>
+</tr>
+</script>
+
+<script type="text/javascript">
+  var mediafile_rows = [];
+
+  function str_size(bytes) {
+    if (bytes === undefined || bytes === null) {
+      return "-";
+    }
+    if (bytes >= 1024 * 1024 * 1024) {
+      return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
+    }
+    if (bytes >= 1024 * 1024) {
+      return (bytes / 1024 / 1024).toFixed(1) + " MB";
+    }
+    if (bytes >= 1024) {
+      return (bytes / 1024).toFixed(1) + " KB";
+    }
+    return bytes + " B";
+  }
+
+  function status_badge(status) {
+    if (status === "linked") {
+      return '<span class="mediafile-status-badge mediafile-status-linked">已关联</span>';
+    }
+    if (status === "orphan") {
+      return '<span class="mediafile-status-badge mediafile-status-orphan">孤儿链接 · 删库文件即释放</span>';
+    }
+    return '<span class="mediafile-status-badge mediafile-status-unlinked">未入库 · 删源文件即释放</span>';
+  }
+
+  function shorten(text, max) {
+    if (!text) {
+      return "";
+    }
+    return text.length > max ? "…" + text.slice(text.length - max) : text;
+  }
+
+  function esc(text) {
+    return String(text == null ? "" : text)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+  }
+
+  function refresh_index() {
+    $("#mediafile_table_count").text("扫描中，请稍候...");
+    ajax_post("get_media_files_index", {}, function (ret) {
+      if (ret.code !== 0) {
+        show_fail_modal("扫描失败：" + (ret.msg || "未知错误"));
+        $("#mediafile_table_count").text("扫描失败");
+        return;
+      }
+      mediafile_rows = ret.data || [];
+      $("#summary_reclaimable").text(str_size(ret.reclaimable_size));
+      $("#summary_linked").text(ret.counts.linked);
+      $("#summary_orphan").text(ret.counts.orphan);
+      $("#summary_unlinked").text(ret.counts.unlinked);
+      render_table();
+    });
+  }
+
+  function render_table() {
+    var status = $("#filter_status").val();
+    var lib = $("#filter_lib").val();
+    var search = ($("#filter_search").val() || "").toLowerCase();
+
+    var rows = mediafile_rows.filter(function (row) {
+      if (status === "reclaimable") {
+        if (row.status !== "orphan" && row.status !== "unlinked") {
+          return false;
+        }
+      } else if (status && row.status !== status) {
+        return false;
+      }
+      if (lib && !((row.lib || "").indexOf(lib) === 0)) {
+        return false;
+      }
+      if (search && (row.name || "").toLowerCase().indexOf(search) === -1
+          && (row.lib || "").toLowerCase().indexOf(search) === -1
+          && (row.src || "").toLowerCase().indexOf(search) === -1) {
+        return false;
+      }
+      return true;
+    });
+
+    var template_html = $("#mediafile_row_template").text();
+    var body = $("#mediafile_table_body");
+    body.empty();
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      body.append(
+          template_html.replaceAll("{IDX}", row.idx)
+              .replaceAll("{NAME}", esc(row.name))
+              .replaceAll("{SHORT_NAME}", esc(shorten(row.name || "", 60)))
+              .replaceAll("{FILESIZE}", str_size(row.size))
+              .replaceAll("{LIB}", row.lib
+                  ? '<span title="' + esc(row.lib) + '">' + esc(row.lib) + '</span>'
+                  : '<span class="mediafile-path-empty">—</span>')
+              .replaceAll("{SRC}", row.src
+                  ? '<span title="' + esc(row.src) + '">' + esc(row.src) + '</span>'
+                  : '<span class="mediafile-path-empty">—</span>')
+              .replaceAll("{STATUS_BADGE}", status_badge(row.status))
+      );
+    }
+    var reclaimable = rows.reduce(function (acc, row) {
+      return acc + ((row.status === "linked") ? 0 : row.size);
+    }, 0);
+    $("#mediafile_table_count").text(
+        "共 " + rows.length + " 个文件，当前筛选下可释放 " + str_size(reclaimable));
+  }
+
+  function build_items(idxs) {
+    return idxs.map(function (i) {
+      var row = mediafile_rows[parseInt(i)];
+      return {lib: row.lib || "", src: row.src || ""};
+    });
+  }
+
+  // 删除前的空间后果说明
+  function delete_warning(flag, items) {
+    if (flag === "del_lib") {
+      return "将删除媒体库中的文件。<br><b>源文件仍在，不会释放磁盘空间。</b><br><br>"
+          + "确认删除以下 " + items.length + " 个媒体库文件？";
+    }
+    if (flag === "del_src") {
+      return "将删除下载目录中的源文件。<br><b>媒体库链接仍在，不会释放磁盘空间。</b><br><br>"
+          + "注意：若该文件属于整季包，其它集数的种子来源不受影响（本次只删选中文件）。<br><br>"
+          + "确认删除以下 " + items.length + " 个源文件？";
+    }
+    return "将同时删除媒体库文件与源文件。<br><b class=\"text-red\">这才是真正释放磁盘空间的操作</b>，"
+        + "删除后该媒体将从 Jellyfin 消失。<br><br>确认删除以下 " + items.length + " 组文件？";
+  }
+
+  function do_delete(idxs, flag) {
+    if (!idxs || idxs.length === 0) {
+      show_fail_modal("没有选中任何文件！");
+      return;
+    }
+    var items = build_items(idxs);
+    var remove_torrent = $("#opt_remove_torrent").prop("checked");
+    var extra = remove_torrent ? "<br><br>已勾选「同时删种」，将从下载器移除对应任务（不删下载器里的数据）。" : "";
+    show_confirm_modal(delete_warning(flag, items) + extra, function () {
+      hide_confirm_modal();
+      ajax_post("delete_media_files", {
+        items: items,
+        flag: flag,
+        remove_torrent: remove_torrent
+      }, function (ret) {
+        if (ret.code !== 0) {
+          show_fail_modal("删除失败：" + (ret.msg || "未知错误"));
+          return;
+        }
+        var html = '<div class="mb-2">释放空间：<b>' + str_size(ret.freed_size) + '</b></div>';
+        if (ret.success && ret.success.length > 0) {
+          html += '<div class="mb-1 text-green">成功 ' + ret.success.length + ' 项</div>';
+          html += '<div class="mediafile-path mb-2">'
+              + ret.success.map(function (s) {
+                return "- " + esc(s.path);
+              }).join("<br>") + '</div>';
+        }
+        if (ret.failed && ret.failed.length > 0) {
+          html += '<div class="mb-1 text-red">失败 ' + ret.failed.length + ' 项</div>';
+          html += '<div class="mediafile-path">'
+              + ret.failed.map(function (f) {
+                return "- " + esc(f.path) + "<br><span class='text-muted'>" + esc(f.msg) + "</span>";
+              }).join("<br>") + '</div>';
+        }
+        $("#mediafile_result_body").html(html);
+        $("#modal-mediafile-result").modal("show");
+      });
+    });
+  }
+
+  function batch_delete(flag) {
+    do_delete(select_GetSelectedVAL("mediafile_item"), flag);
+  }
+
+  function single_delete(idx, flag) {
+    do_delete([idx], flag);
+  }
+
+  refresh_index();
+</script>

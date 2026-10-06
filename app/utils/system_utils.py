@@ -323,6 +323,40 @@ class SystemUtils:
         return ret_files
 
     @staticmethod
+    def scan_inode_index(roots, exts=None):
+        """
+        扫描多个根目录下的文件，按 inode 归并，用于比对硬链接两端
+
+        :param roots: 要扫描的根目录列表
+        :param exts: 需要保留的扩展名列表，如 ['.mkv', '.mp4']，为空表示不过滤
+        :return: {inode: [(size, path), ...]}
+        """
+        index = {}
+        if not roots:
+            return index
+        if isinstance(roots, str):
+            roots = [roots]
+        for root in roots:
+            if not root or not os.path.isdir(root):
+                continue
+            for dirpath, dirnames, filenames in os.walk(root):
+                # 跳过群晖缩略图/回收站目录，避免无谓遍历
+                dirnames[:] = [d for d in dirnames
+                               if d not in ('@eaDir', '#recycle', '@tmp', '.@__thumb')]
+                for filename in filenames:
+                    if exts and os.path.splitext(filename)[1].lower() not in exts:
+                        continue
+                    path = os.path.join(dirpath, filename).replace('\\', '/')
+                    if PathUtils.is_invalid_path(path):
+                        continue
+                    try:
+                        st = os.stat(path)
+                    except OSError:
+                        continue
+                    index.setdefault(st.st_ino, []).append((st.st_size, path))
+        return index
+
+    @staticmethod
     def get_free_space(path):
         """
         获取指定路径的剩余空间（单位：GB）

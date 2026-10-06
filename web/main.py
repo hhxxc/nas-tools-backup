@@ -902,6 +902,13 @@ def mediafile():
                            Dir=DirR or DirD)
 
 
+# 媒体文件管理页面
+@App.route('/mediafiles', methods=['POST', 'GET'])
+@login_required
+def mediafiles():
+    return render_template("rename/mediafiles.html")
+
+
 # 基础设置页面
 @App.route('/basic', methods=['POST', 'GET'])
 @login_required

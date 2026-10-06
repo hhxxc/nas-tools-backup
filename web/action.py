@@ -183,6 +183,8 @@ class WebAction:
             "get_dirhardlink": self.__get_dirhardlink,
             "rename_file": self.__rename_file,
             "delete_files": self.__delete_files,
+            "get_media_files_index": self.__get_media_files_index,
+            "delete_media_files": self.__delete_media_files,
             "download_subtitle": self.__download_subtitle,
             "get_download_setting": self.__get_download_setting,
             "update_download_setting": self.__update_download_setting,
@@ -4385,6 +4387,240 @@ class WebAction:
                 else:
                     log.info(del_msg)
         return {"code": 0}
+
+    @staticmethod
+    def __get_media_roots():
+        """
+        获取媒体库目录与同步来源目录
+        """
+        media_conf = Config().get_config('media')
+        lib_roots = []
+        for key in ('movie_path', 'tv_path', 'anime_path', 'unknown_path'):
+            for path in media_conf.get(key) or []:
+                if path:
+                    lib_roots.append(os.path.normpath(path).replace('\\', '/'))
+        src_roots = []
+        for sync_dir in Sync().get_filehardlinks_sync_dirs():
+            if sync_dir[0]:
+                src_roots.append(os.path.normpath(sync_dir[0]).replace('\\', '/'))
+        return list(dict.fromkeys(lib_roots)), list(dict.fromkeys(src_roots))
+
+    @staticmethod
+    def __classify_media_files(lib_roots, src_roots):
+        """
+        按 inode 合并媒体库与同步来源两侧的文件，给出三态分类
+        """
+        exts = [str(ext).lower() for ext in RMT_MEDIAEXT]
+        lib_index = SystemUtils().scan_inode_index(lib_roots, exts=exts)
+        src_index = SystemUtils().scan_inode_index(src_roots, exts=exts)
+        rows = []
+        for inode, entries in lib_index.items():
+            # 同一 inode 在两侧都应只有一个条目，命中多个时取第一个
+            size, lib_path = entries[0]
+            src_entry = src_index.get(inode)
+            if not src_entry:
+                # 媒体库只剩自己，说明源文件已不在，删掉即真正释放空间
+                rows.append({
+                    "name": os.path.basename(lib_path),
+                    "size": size,
+                    "lib": lib_path,
+                    "src": "",
+                    "status": "orphan"
+                })
+            else:
+                rows.append({
+                    "name": os.path.basename(lib_path),
+                    "size": size,
+                    "lib": lib_path,
+                    "src": src_entry[0][1],
+                    "status": "linked"
+                })
+        for inode, entries in src_index.items():
+            if inode in lib_index:
+                continue
+            size, src_path = entries[0]
+            # 源文件在下载目录但媒体库没有对应链接，删掉即真正释放空间
+            rows.append({
+                "name": os.path.basename(src_path),
+                "size": size,
+                "lib": "",
+                "src": src_path,
+                "status": "unlinked"
+            })
+        rows.sort(key=lambda x: (x["status"] != "unlinked", x["status"] != "orphan", -x["size"]))
+        for idx, row in enumerate(rows):
+            row["idx"] = idx
+        return rows
+
+    def __get_media_files_index(self, data):
+        """
+        媒体库与源文件对照索引
+        """
+        try:
+            lib_roots, src_roots = self.__get_media_roots()
+            rows = self.__classify_media_files(lib_roots, src_roots)
+            counts = {"linked": 0, "orphan": 0, "unlinked": 0}
+            reclaimable = 0
+            for row in rows:
+                counts[row["status"]] += 1
+                if row["status"] in ("orphan", "unlinked"):
+                    reclaimable += row["size"]
+            return {
+                "code": 0,
+                "count": len(rows),
+                "counts": counts,
+                "reclaimable_size": reclaimable,
+                "lib_roots": lib_roots,
+                "src_roots": src_roots,
+                "data": rows
+            }
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            return {"code": -1, "msg": "扫描媒体文件失败：%s" % str(e)}
+
+    def __delete_media_files(self, data):
+        """
+        按选中项删除媒体库文件或源文件
+
+        flag: del_lib 只删媒体库、del_src 只删源文件、del_both 两端都删
+        """
+        items = data.get("items") or []
+        flag = data.get("flag")
+        remove_torrent = data.get("remove_torrent")
+        if not items:
+            return {"code": -1, "msg": "没有选中任何文件"}
+        if flag not in ("del_lib", "del_src", "del_both"):
+            return {"code": -1, "msg": "删除类型不合法"}
+        lib_roots, src_roots = self.__get_media_roots()
+
+        def is_allowed(path, roots):
+            """
+            只允许删除配置的媒体库目录或同步来源目录下的文件
+            """
+            if not path or not roots:
+                return False
+            for root in roots:
+                if PathUtils.is_path_in_path(root, path):
+                    return True
+            return False
+
+        success = []
+        failed = []
+        freed = 0
+        _filetransfer = FileTransfer()
+        for item in items:
+            has_lib = bool(item.get("lib"))
+            has_src = bool(item.get("src"))
+            targets = []
+            if flag in ("del_lib", "del_both") and has_lib:
+                targets.append(("lib", item["lib"]))
+            if flag in ("del_src", "del_both") and has_src:
+                targets.append(("src", item["src"]))
+            if not targets:
+                failed.append({"path": item.get("lib") or item.get("src") or "",
+                               "msg": "该项没有对应的文件"})
+                continue
+            # 只有把这份数据的最后一个硬链接删掉，磁盘空间才真正释放：
+            # 两端都在时只有两端都删才释放，只剩一端时删掉它即释放
+            frees_space = (flag == "del_both") or (flag == "del_lib" and not has_src) \
+                or (flag == "del_src" and not has_lib)
+            item_freed = 0
+            for side, path in targets:
+                path = os.path.normpath(path).replace('\\', '/')
+                roots = lib_roots if side == "lib" else src_roots
+                if not is_allowed(path, roots):
+                    log.warn("【MediaFiles】拒绝删除非媒体目录下的文件：%s" % path)
+                    failed.append({"path": path, "msg": "不在媒体库或同步目录范围内，已拒绝"})
+                    continue
+                if not os.path.exists(path):
+                    failed.append({"path": path, "msg": "文件不存在"})
+                    continue
+                try:
+                    size = os.path.getsize(path)
+                except OSError:
+                    size = 0
+                del_flag, del_msg = self.delete_media_file(filedir=os.path.dirname(path),
+                                                           filename=os.path.basename(path))
+                # delete_media_file 在异常时也会返回 True，所以以文件是否真的消失为准
+                if os.path.exists(path):
+                    failed.append({"path": path, "msg": del_msg or "删除失败"})
+                    continue
+                # 只统计一次（同一 inode 的两端只算一份）
+                item_freed = max(item_freed, size)
+                # 清理转移历史，避免历史记录里留下指向已删文件的条目
+                DbHelper().delete_transfer_history_by_full_path(path, roots=lib_roots)
+                if side == "src":
+                    # 源文件已删，取消其“已转移”标记，历史里也不会再有它
+                    _filetransfer.delete_transfer_blacklist(path)
+                    EventManager().send_event(EventType.SourceFileDeleted, {"file": path})
+                else:
+                    # 只删库文件时，必须保留源文件的“已转移”标记，
+                    # 否则目录同步会把它当成新文件重新链接回来
+                    EventManager().send_event(EventType.LibraryFileDeleted, {"file": path})
+                success.append({"path": path, "msg": del_msg})
+            if frees_space:
+                freed += item_freed
+        if remove_torrent:
+            for item in items:
+                self.__remove_media_file_torrent(item)
+        return {
+            "code": 0,
+            "success": success,
+            "failed": failed,
+            "freed_size": freed
+        }
+
+    @staticmethod
+    def __remove_media_file_torrent(item):
+        """
+        移除选中文件对应的下载任务（只摘任务，不删下载器里的数据）
+        """
+        _downloader = Downloader()
+        _dbhelper = DbHelper()
+        for path in (item.get("src"), item.get("lib")):
+            if not path:
+                continue
+            path = os.path.normpath(path)
+            # 优先按转移记录找，能精确到标题
+            transinfo = _dbhelper.get_transfer_info_by_source_path(path) \
+                or _dbhelper.get_transfer_info_by_dest_path(path)
+            if transinfo:
+                WebAction.delete_history_torrents(transinfo)
+                return
+            # 没有转移记录（如重复下载、转移失败的遗留），
+            # 则向上逐级匹配下载历史里的保存目录
+            parent = os.path.dirname(path)
+            while parent and parent != os.path.dirname(parent):
+                info = _dbhelper.get_download_history_by_path(parent)
+                if info:
+                    WebAction.__delete_torrent_by_info(_downloader, info, path)
+                    return
+                parent = os.path.dirname(parent)
+
+    @staticmethod
+    def __delete_torrent_by_info(_downloader, info, path):
+        """
+        核对下载器里确实存在该文件后，移除对应下载任务
+        """
+        if not info.DOWNLOADER or not info.DOWNLOAD_ID:
+            return
+        try:
+            dl_files = _downloader.get_files(tid=info.DOWNLOAD_ID,
+                                             downloader_id=info.DOWNLOADER)
+            if not dl_files:
+                return
+            if not any(f.get("name") and path.endswith(os.path.normpath(f["name"]))
+                       for f in dl_files):
+                return
+            log.info("【MediaFiles】删除下载任务：%s - %s" % (info.DOWNLOADER, info.DOWNLOAD_ID))
+            # 同 delete_history_torrents，只摘任务不删数据：
+            # 整季包若让下载器连带删文件，会把同包其它集一起抹掉
+            _downloader.delete_torrents(downloader_id=info.DOWNLOADER,
+                                        ids=info.DOWNLOAD_ID,
+                                        delete_file=False)
+        except Exception as e:
+            log.error("【MediaFiles】删除下载任务失败：%s" % str(e))
+            ExceptionUtils.exception_traceback(e)
 
     @staticmethod
     def __download_subtitle(data):

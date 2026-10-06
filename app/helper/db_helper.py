@@ -3,7 +3,7 @@ import os.path
 import time
 import json
 from enum import Enum
-from sqlalchemy import cast, func, and_, case
+from sqlalchemy import cast, func, and_, case, or_
 
 from app.db import MainDb, DbPersist
 from app.db.models import *
@@ -184,6 +184,28 @@ class DbHelper:
         """
         return self._db.query(TRANSFERHISTORY).filter(TRANSFERHISTORY.ID == int(logid)).first()
 
+    def get_transfer_info_by_source_path(self, full_path):
+        """
+        据源文件完整路径查询转移记录
+        """
+        if not full_path:
+            return None
+        path = os.path.normpath(full_path)
+        return self._db.query(TRANSFERHISTORY).filter(
+            TRANSFERHISTORY.SOURCE_PATH == os.path.dirname(path),
+            TRANSFERHISTORY.SOURCE_FILENAME == os.path.basename(path)).first()
+
+    def get_transfer_info_by_dest_path(self, full_path):
+        """
+        据目标文件完整路径查询转移记录
+        """
+        if not full_path:
+            return None
+        path = os.path.normpath(full_path)
+        return self._db.query(TRANSFERHISTORY).filter(
+            TRANSFERHISTORY.DEST_PATH == os.path.dirname(path),
+            TRANSFERHISTORY.DEST_FILENAME == os.path.basename(path)).first()
+
     def get_transfer_info_by(self, tmdbid, season=None, season_episode=None):
         """
         据tmdbid、season、season_episode查询转移记录
@@ -221,6 +243,37 @@ class DbHelper:
         根据logid删除记录
         """
         self._db.query(TRANSFERHISTORY).filter(TRANSFERHISTORY.ID == int(logid)).delete()
+
+    @DbPersist(_db)
+    def delete_transfer_history_by_full_path(self, full_path, roots=None):
+        """
+        按源文件或目标文件的完整路径删除转移记录
+
+        历史记录里的 DEST_PATH 可能带着二级分类等已被移除的中间层级，
+        所以除了精确匹配，还用「从库根算起的相对路径结尾」兜底匹配。
+        """
+        if not full_path:
+            return 0
+        targets = []
+        path = os.path.normpath(full_path)
+        filedir = os.path.dirname(path)
+        filename = os.path.basename(path)
+        # 源文件路径是精确的
+        targets.append(and_(TRANSFERHISTORY.SOURCE_PATH == filedir,
+                            TRANSFERHISTORY.SOURCE_FILENAME == filename))
+        targets.append(and_(TRANSFERHISTORY.DEST_PATH == filedir,
+                            TRANSFERHISTORY.DEST_FILENAME == filename))
+        # 目标路径按相对库根的后缀匹配，容忍中间缺失的分类层级
+        dest_dir = filedir.replace("\\", "/")
+        if roots:
+            for root in roots:
+                root = os.path.normpath(root).replace("\\", "/")
+                if dest_dir == root or dest_dir.startswith(root + "/"):
+                    rel = dest_dir[len(root):].lstrip("/")
+                    if rel:
+                        targets.append(and_(TRANSFERHISTORY.DEST_PATH.like("%/" + rel),
+                                            TRANSFERHISTORY.DEST_FILENAME == filename))
+        return self._db.query(TRANSFERHISTORY).filter(or_(*targets)).delete(synchronize_session=False)
 
 
     @DbPersist(_db)

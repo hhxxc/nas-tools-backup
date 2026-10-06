@@ -698,3 +698,55 @@ LI.directory a.selected {
     width: 28px;
     height: 28px;
 }
+
+/* 媒体文件管理页：源文件与媒体库链接的三态标记 */
+.mediafile-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    border: 1px solid transparent;
+}
+
+.mediafile-status-linked {
+    color: #6c7a91;
+    background-color: rgba(108, 122, 145, 0.12);
+    border-color: rgba(108, 122, 145, 0.3);
+}
+
+.mediafile-status-orphan {
+    color: #b8860b;
+    background-color: rgba(245, 159, 0, 0.14);
+    border-color: rgba(245, 159, 0, 0.35);
+}
+
+.mediafile-status-unlinked {
+    color: #c92a2a;
+    background-color: rgba(201, 42, 42, 0.12);
+    border-color: rgba(201, 42, 42, 0.32);
+}
+
+.mediafile-path {
+    font-size: 0.75rem;
+    word-break: break-all;
+    line-height: 1.35;
+}
+
+.mediafile-path-empty {
+    color: var(--tblr-muted);
+    font-style: italic;
+}
+
+.mediafile-summary-card .mediafile-summary-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.mediafile-summary-card .mediafile-summary-label {
+    font-size: 0.75rem;
+    color: var(--tblr-muted);
+}
