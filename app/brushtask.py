@@ -1,3 +1,5 @@
+import ast
+import os
 import re
 import sys
 import time
@@ -14,7 +16,8 @@ from app.helper import DbHelper, RssHelper
 from app.media.meta import MetaInfo
 from app.message import Message
 from app.sites import Sites, SiteConf
-from app.utils import StringUtils, ExceptionUtils
+from app.sync import Sync
+from app.utils import StringUtils, ExceptionUtils, PathUtils
 from app.utils.commons import singleton
 from app.utils.types import BrushDeleteType
 from config import BRUSH_REMOVE_TORRENTS_INTERVAL, Config
@@ -122,8 +125,8 @@ class BrushTask(object):
                 "transfer": True if task.TRANSFER == "Y" else False,
                 "sendmessage": True if task.SENDMESSAGE == "Y" else False,
                 "free": task.FREELEECH,
-                "rss_rule": eval(task.RSS_RULE),
-                "remove_rule": eval(task.REMOVE_RULE),
+                "rss_rule": self.__parse_rule(task.RSS_RULE),
+                "remove_rule": self.__parse_rule(task.REMOVE_RULE),
                 "seed_size": task.SEED_SIZE,
                 "total_size": total_size,
                 "rss_url": task.RSSURL if task.RSSURL else site_info.get("rssurl"),
@@ -138,6 +141,23 @@ class BrushTask(object):
                 "lst_mod_date": task.LST_MOD_DATE,
                 "site_url": site_url
             }
+
+    @staticmethod
+    def __parse_rule(rule_str):
+        """
+        解析数据库里的规则字符串
+
+        历史数据是 Python 字面量格式（如 "{'free': 'FREE'}"），用 literal_eval
+        而不是 eval：只认字面量、不执行任意代码。
+        """
+        if not rule_str:
+            return {}
+        try:
+            rule = ast.literal_eval(rule_str)
+        except (ValueError, SyntaxError) as e:
+            log.error("【Brush】解析刷流规则失败：%s，原始内容：%s" % (str(e), rule_str))
+            return {}
+        return rule if isinstance(rule, dict) else {}
 
     def get_brushtask_info(self, taskid=None):
         """
@@ -512,12 +532,21 @@ class BrushTask(object):
 
                 # 删除下载器种子
                 if delete_ids:
-                    self.downloader.delete_torrents(downloader_id=downloader_id,
-                                                    ids=delete_ids,
-                                                    delete_file=True)
-                    # 检验下载器中种子是否已经删除
-                    time.sleep(5)
-                    torrents = self.downloader.get_torrents(downloader_id=downloader_id, ids=delete_ids)
+                    # 删种会连磁盘文件一起删，先剔除落在媒体库里的，避免把片库删掉
+                    delete_ids, blocked = self.__filter_media_lib_ids(downloader_id=downloader_id,
+                                                                      ids=delete_ids)
+                    for blocked_name, blocked_path in blocked:
+                        log.warn("【Brush】%s 的数据位于媒体库目录 %s，已跳过删除以免破坏片库"
+                                 % (blocked_name, blocked_path))
+                    if delete_ids:
+                        self.downloader.delete_torrents(downloader_id=downloader_id,
+                                                        ids=delete_ids,
+                                                        delete_file=True)
+                    # 校验删除结果（被跳过的种子不移出列表，避免状态被标成已删除）
+                    if delete_ids:
+                        time.sleep(5)
+                    torrents = self.downloader.get_torrents(downloader_id=downloader_id,
+                                                            ids=delete_ids) if delete_ids else []
                     if torrents is None:
                         delete_ids = []
                         update_torrents = []
@@ -545,6 +574,81 @@ class BrushTask(object):
                                                          remove_count=len(delete_ids) + len(remove_torrent_ids))
             except Exception as e:
                 ExceptionUtils.exception_traceback(e)
+
+    def __get_media_lib_paths(self):
+        """
+        获取不能被刷流删除的目录：媒体库目录 + 目录同步的来源目录
+
+        媒体库（link/*）是 Jellyfin 实际播放的；同步来源目录（videos/*）会被
+        硬链接进媒体库。刷流文件若落在这两类目录里，删种就会污染甚至毁掉片库，
+        所以一并列入保护范围。
+        """
+        paths = []
+        media_conf = Config().get_config('media') or {}
+        for key in ('movie_path', 'tv_path', 'anime_path', 'unknown_path'):
+            for path in media_conf.get(key) or []:
+                if path:
+                    paths.append(os.path.normpath(path).replace('\\', '/'))
+        # 目录同步的来源目录（硬链接进媒体库的那一端）
+        try:
+            for sync_dir in Sync().get_filehardlinks_sync_dirs():
+                for path in (sync_dir[0], sync_dir[1]):
+                    if path:
+                        paths.append(os.path.normpath(path).replace('\\', '/'))
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+        return list(dict.fromkeys(paths))
+
+    def __filter_media_lib_ids(self, downloader_id, ids):
+        """
+        剔除数据落在媒体库目录内的种子
+
+        刷流的 delete_file=True 会把磁盘文件一起删掉，正常刷流文件应在下载目录里。
+        但若保存路径被误配成媒体库（或种子被别的流程搬进媒体库），
+        删种就会毁掉片库，所以这里做一次性拦截。
+
+        :return: (可删除的 id 列表, [(种子名, 命中路径), ...])
+        """
+        if not ids:
+            return ids, []
+        media_paths = self.__get_media_lib_paths()
+        if not media_paths:
+            return ids, []
+        try:
+            torrents = self.downloader.get_torrents(downloader_id=downloader_id, ids=ids)
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            torrents = None
+        if not torrents:
+            # 拿不到落点信息时保守放行（与原有行为一致），不因此中断刷流
+            return ids, []
+        blocked = []
+        allowed = []
+        for torrent in torrents:
+            torrent_id = torrent.get("hash") if isinstance(torrent, dict) else str(torrent.hashString)
+            name = torrent.get("name") if isinstance(torrent, dict) else torrent.name
+            # content_path 指向实际数据（文件或目录），save_path 是保存目录
+            candidates = []
+            for field in ("content_path", "save_path"):
+                value = torrent.get(field) if isinstance(torrent, dict) else getattr(torrent, field, None)
+                if value:
+                    candidates.append(os.path.normpath(value).replace('\\', '/'))
+            hit = None
+            for candidate in candidates:
+                for media_path in media_paths:
+                    # 落点在媒体库内：candidate 本身是媒体库或其子路径，
+                    # 或 candidate 是媒体库的父目录（种子目录含媒体库）
+                    if PathUtils.is_path_in_path(media_path, candidate) \
+                            or PathUtils.is_path_in_path(candidate, media_path):
+                        hit = candidate
+                        break
+                if hit:
+                    break
+            if hit:
+                blocked.append((name, hit))
+            else:
+                allowed.append(torrent_id)
+        return allowed, blocked
 
     def __is_allow_new_torrent(self, taskinfo, dlcount, current_site_dlcount, current_site_count, site_info, torrent_size=None):
         """
@@ -578,12 +682,14 @@ class BrushTask(object):
             client_speed = downloader.get_client_speed()
             if client_speed and up_limit_speed and str(up_limit_speed).isdigit():
                 if float(client_speed.get('up_speed')) / 1024 >= float(up_limit_speed):
-                    log.warn("【Brush】刷流任务 %s 所选下载器 %s 目前上传速度 %s Kb/s，不再新增下载"
+                    log.warn("【Brush】刷流任务 %s 所选下载器 %s 目前上传速度 %s Kb/s，达到上限，不再新增下载"
                              % (task_name, downloader_name, round(float(client_speed.get('up_speed')) / 1024, 4)))
+                    return False
             if client_speed and dl_limit_speed and str(dl_limit_speed).isdigit():
                 if float(client_speed.get('dl_speed')) / 1024 >= float(dl_limit_speed):
-                    log.warn("【Brush】刷流任务 %s 所选下载器 %s 目前下载速度 %s Kb/s，不再新增下载"
+                    log.warn("【Brush】刷流任务 %s 所选下载器 %s 目前下载速度 %s Kb/s，达到上限，不再新增下载"
                              % (task_name, downloader_name, round(float(client_speed.get('dl_speed')) / 1024, 4)))
+                    return False
 
         # 检查正在下载的任务数
         if dlcount:
