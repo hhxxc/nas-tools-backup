@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import time
@@ -499,10 +500,33 @@ class Qbittorrent(_IDownloadClient):
                                             seeding_time_limit=seeding_time_limit,
                                             use_auto_torrent_management=is_auto,
                                             cookie=cookie)
-            return True if qbc_ret and str(qbc_ret).find("Ok") != -1 else False
+            return self.__is_add_success(qbc_ret)
         except Exception as err:
             log.error(f"【{self.client_name}】{self.name} 添加种子出错：{str(err)}")
             return False
+
+    @staticmethod
+    def __is_add_success(qbc_ret):
+        """
+        判断种子添加结果。
+
+        qBittorrent 5.x (WebAPI 2.14.0+) 的 torrents/add 返回 JSON
+        （added_torrent_ids/success_count/pending_count/failure_count），
+        不再是纯文本 "Ok."，按文本匹配会永远判失败 —— 种子其实已加进下载器，
+        但调用方当失败处理：不记账、不删种、不写下载历史。
+        """
+        if not qbc_ret:
+            return False
+        if isinstance(qbc_ret, dict):
+            return bool(qbc_ret.get("success_count") or qbc_ret.get("pending_count"))
+        text = str(qbc_ret)
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            return bool(data.get("success_count") or data.get("pending_count"))
+        return text.find("Ok") != -1
 
     def start_torrents(self, ids):
         if not self.qbc:
