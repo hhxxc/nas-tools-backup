@@ -237,7 +237,7 @@ class MTeamApi:
                 "User-Agent": ua,
                 "Accept": "application/json"
             },
-            proxies=proxy,
+            proxies=Config().get_proxies() if proxy else None,
             timeout=30
         ).post_res(url=site_url, data=("id=%d" % torrentid))
         if res and res.status_code == 200:
