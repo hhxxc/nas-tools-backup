@@ -4552,11 +4552,20 @@ class WebAction:
                 if side == "src":
                     # 源文件已删，取消其“已转移”标记，历史里也不会再有它
                     _filetransfer.delete_transfer_blacklist(path)
-                    EventManager().send_event(EventType.SourceFileDeleted, {"file": path})
+                    # 事件负载要与既有约定一致（path/filename），
+                    # 否则监听方按 None 拼路径会在处理事件时抛异常
+                    EventManager().send_event(EventType.SourceFileDeleted, {
+                        "path": os.path.dirname(path),
+                        "filename": os.path.basename(path)
+                    })
                 else:
                     # 只删库文件时，必须保留源文件的“已转移”标记，
                     # 否则目录同步会把它当成新文件重新链接回来
-                    EventManager().send_event(EventType.LibraryFileDeleted, {"file": path})
+                    EventManager().send_event(EventType.LibraryFileDeleted, {
+                        "path": os.path.dirname(path),
+                        "filename": os.path.basename(path)
+                    })
+                log.info("【MediaFiles】已删除 %s（%s）" % (path, del_msg))
                 success.append({"path": path, "msg": del_msg})
             if frees_space:
                 freed += item_freed

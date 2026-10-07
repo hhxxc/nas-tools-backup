@@ -7,7 +7,9 @@
           媒体文件
         </h2>
         <div class="text-muted mt-1">
-          对照媒体库（Jellyfin 播放的链接）与下载目录里的源文件，按 inode 判定是否同一份数据
+          同一个视频可能同时存在于「媒体库」（Jellyfin 播放的那份）和「下载目录」（qB 做种的那份）。
+          这种情况两份指向同一块磁盘数据，删任意一份都不释放空间，两份都删才释放。
+          下表按这个原理把每个文件标成三种状态。
         </div>
       </div>
       <div class="col-auto ms-auto d-print-none">
@@ -34,7 +36,7 @@
       <div class="card">
         <div class="card-body">
           <div class="mediafile-summary-value" id="summary_linked">-</div>
-          <div class="mediafile-summary-label">已关联（删单端不释放）</div>
+          <div class="mediafile-summary-label">两个都在（删一端不释放）</div>
         </div>
       </div>
     </div>
@@ -42,7 +44,7 @@
       <div class="card">
         <div class="card-body">
           <div class="mediafile-summary-value text-yellow" id="summary_orphan">-</div>
-          <div class="mediafile-summary-label">孤儿链接（源已丢失）</div>
+          <div class="mediafile-summary-label">只有媒体库（源已丢，可释放）</div>
         </div>
       </div>
     </div>
@@ -50,7 +52,7 @@
       <div class="card">
         <div class="card-body">
           <div class="mediafile-summary-value text-red" id="summary_unlinked">-</div>
-          <div class="mediafile-summary-label">未入库（源端无链接）</div>
+          <div class="mediafile-summary-label">只有源文件（未入库，可释放）</div>
         </div>
       </div>
     </div>
@@ -63,10 +65,10 @@
           <label class="form-label">状态</label>
           <select class="form-select" id="filter_status" onchange="render_table()">
             <option value="">全部</option>
-            <option value="orphan">仅孤儿链接（可释放）</option>
-            <option value="unlinked">仅未入库（可释放）</option>
-            <option value="linked">仅已关联</option>
-            <option value="reclaimable">仅可释放（孤儿 + 未入库）</option>
+            <option value="reclaimable">只看能释放空间的（只在一端）</option>
+            <option value="orphan">只有媒体库 · 源已丢</option>
+            <option value="unlinked">只有源文件 · 未入库</option>
+            <option value="linked">两个都在</option>
           </select>
         </div>
         <div class="col-md-3">
@@ -123,13 +125,13 @@
           </a>
           <div class="dropdown-menu dropdown-menu-end">
             <a class="dropdown-item text-danger" href="javascript:batch_delete('del_lib')">
-              只删媒体库文件（不释放空间）
+              只删媒体库那份（一端时不释放）
             </a>
             <a class="dropdown-item text-danger" href="javascript:batch_delete('del_src')">
-              只删源文件（不释放空间）
+              只删源文件那份（一端时不释放）
             </a>
             <a class="dropdown-item text-danger" href="javascript:batch_delete('del_both')">
-              两端都删（真正释放空间）
+              两份都删（释放空间）
             </a>
           </div>
         </div>
@@ -175,9 +177,9 @@
         {{ SVG.dots_vertical() }}
       </a>
       <div class="dropdown-menu dropdown-menu-end">
-        <a class="dropdown-item text-danger" href="javascript:single_delete({IDX}, 'del_lib')">只删媒体库文件</a>
-        <a class="dropdown-item text-danger" href="javascript:single_delete({IDX}, 'del_src')">只删源文件</a>
-        <a class="dropdown-item text-danger" href="javascript:single_delete({IDX}, 'del_both')">两端都删（释放空间）</a>
+        <a class="dropdown-item text-danger" href="javascript:single_delete({IDX}, 'del_lib')">只删媒体库那份</a>
+        <a class="dropdown-item text-danger" href="javascript:single_delete({IDX}, 'del_src')">只删源文件那份</a>
+        <a class="dropdown-item text-danger" href="javascript:single_delete({IDX}, 'del_both')">两份都删（释放空间）</a>
       </div>
     </div>
   </td>
@@ -205,12 +207,12 @@
 
   function status_badge(status) {
     if (status === "linked") {
-      return '<span class="mediafile-status-badge mediafile-status-linked">已关联</span>';
+      return '<span class="mediafile-status-badge mediafile-status-linked">两个都在</span>';
     }
     if (status === "orphan") {
-      return '<span class="mediafile-status-badge mediafile-status-orphan">孤儿链接 · 删库文件即释放</span>';
+      return '<span class="mediafile-status-badge mediafile-status-orphan">只有媒体库 · 删即释放</span>';
     }
-    return '<span class="mediafile-status-badge mediafile-status-unlinked">未入库 · 删源文件即释放</span>';
+    return '<span class="mediafile-status-badge mediafile-status-unlinked">只有源文件 · 删即释放</span>';
   }
 
   function shorten(text, max) {
@@ -303,19 +305,38 @@
     });
   }
 
-  // 删除前的空间后果说明
-  function delete_warning(flag, items) {
-    if (flag === "del_lib") {
-      return "将删除媒体库中的文件。<br><b>源文件仍在，不会释放磁盘空间。</b><br><br>"
-          + "确认删除以下 " + items.length + " 个媒体库文件？";
+  var FLAG_LABEL = {
+    del_lib: "媒体库文件（Jellyfin 播放的那份）",
+    del_src: "源文件（下载目录里的那份）",
+    del_both: "媒体库文件与源文件"
+  };
+
+  // 删除前的空间后果说明 —— 是否释放空间取决于选中项实际是单端还是双端
+  function delete_warning(flag, items, rows) {
+    var frees = rows.filter(function (r) {
+      var hasLib = !!r.lib, hasSrc = !!r.src;
+      if (flag === "del_both") return true;
+      if (flag === "del_lib") return hasLib && !hasSrc;
+      return hasSrc && !hasLib;
+    });
+    var freedBytes = frees.reduce(function (acc, r) { return acc + r.size; }, 0);
+    var n = items.length;
+    var html = "将删除 " + n + " 个文件的" + FLAG_LABEL[flag] + "。<br><br>";
+    if (freedBytes > 0) {
+      html += '<b class="text-green">其中 ' + frees.length + " 个只存在这一端，删除后释放约 "
+          + str_size(freedBytes) + "。</b><br>";
+    }
+    if (frees.length < n) {
+      html += '<b class="text-yellow">另有 ' + (n - frees.length)
+          + " 个是两端都在的，只删这一端不会释放空间。</b><br>";
     }
     if (flag === "del_src") {
-      return "将删除下载目录中的源文件。<br><b>媒体库链接仍在，不会释放磁盘空间。</b><br><br>"
-          + "注意：若该文件属于整季包，其它集数的种子来源不受影响（本次只删选中文件）。<br><br>"
-          + "确认删除以下 " + items.length + " 个源文件？";
+      html += "注意：若该文件属于整季包，其它集数的种子来源不受影响（本次只删选中文件）。<br>";
     }
-    return "将同时删除媒体库文件与源文件。<br><b class=\"text-red\">这才是真正释放磁盘空间的操作</b>，"
-        + "删除后该媒体将从 Jellyfin 消失。<br><br>确认删除以下 " + items.length + " 组文件？";
+    if (flag === "del_both") {
+      html += "删除后这些内容将从 Jellyfin 消失。<br>";
+    }
+    return html + "<br>确认执行？";
   }
 
   function do_delete(idxs, flag) {
@@ -324,9 +345,10 @@
       return;
     }
     var items = build_items(idxs);
+    var rows = idxs.map(function (i) { return mediafile_rows[parseInt(i)]; });
     var remove_torrent = $("#opt_remove_torrent").prop("checked");
     var extra = remove_torrent ? "<br><br>已勾选「同时删种」，将从下载器移除对应任务（不删下载器里的数据）。" : "";
-    show_confirm_modal(delete_warning(flag, items) + extra, function () {
+    show_confirm_modal(delete_warning(flag, items, rows) + extra, function () {
       hide_confirm_modal();
       ajax_post("delete_media_files", {
         items: items,
