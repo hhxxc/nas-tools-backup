@@ -356,7 +356,8 @@ class Transmission(_IDownloadClient):
                 "id": torrent.hashString,
                 "name": torrent.name,
                 "site": torrent.trackers[0].get("sitename") if torrent.trackers else "",
-                "size": torrent.total_size
+                "size": torrent.total_size,
+                "save_path": torrent.download_dir
             })
             remove_torrents_ids.append(torrent.hashString)
         if config.get("samedata") and remove_torrents:
@@ -370,7 +371,8 @@ class Transmission(_IDownloadClient):
                             "id": torrent.hashString,
                             "name": torrent.name,
                             "site": torrent.trackers[0].get("sitename") if torrent.trackers else "",
-                            "size": torrent.total_size
+                            "size": torrent.total_size,
+                            "save_path": torrent.download_dir
                         })
             remove_torrents_plus += remove_torrents
             return remove_torrents_plus

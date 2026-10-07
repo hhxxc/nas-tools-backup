@@ -618,8 +618,94 @@ class Downloader:
         else:
             config["filter_tags"] = config["tags"]
         torrents = _client.get_remove_torrents(config=config)
+        # 只删除已入库且已刮削的种子
+        if config.get("only_scraped") and torrents:
+            lib_index = self.__build_library_inode_index()
+            torrents = [torrent for torrent in torrents
+                        if self.__is_torrent_scraped(torrent=torrent,
+                                                     downloader_id=downloader_id,
+                                                     lib_index=lib_index)]
         torrents.sort(key=lambda x: x.get("name"))
         return torrents
+
+    @staticmethod
+    def __build_library_inode_index():
+        """
+        建立媒体库的 inode 索引，用于判断下载文件是否已硬链接入库
+
+        :return: {inode: [(size, path), ...]}
+        """
+        media_conf = Config().get_config('media') or {}
+        roots = []
+        for key in ('movie_path', 'tv_path', 'anime_path', 'unknown_path'):
+            for path in media_conf.get(key) or []:
+                if path:
+                    roots.append(os.path.normpath(path).replace('\\', '/'))
+        roots = list(dict.fromkeys(roots))
+        if not roots:
+            return {}
+        return SystemUtils().scan_inode_index(roots=roots,
+                                              exts=[str(ext).lower() for ext in RMT_MEDIAEXT])
+
+    @staticmethod
+    def __get_nfo_paths(media_file):
+        """
+        列出媒体文件对应的刮削产物路径
+
+        刮削产物的命名规则见 app/media/scraper.py：电影和剧集都用同目录的
+        "<视频文件名>.nfo"，电影目录另有 movie.nfo，剧集还有 season.nfo（季目录）
+        与 tvshow.nfo（剧集根目录）。
+        """
+        dir_path = os.path.dirname(media_file)
+        file_name = os.path.splitext(os.path.basename(media_file))[0]
+        return [os.path.join(dir_path, "%s.nfo" % file_name),
+                os.path.join(dir_path, "movie.nfo"),
+                os.path.join(dir_path, "season.nfo"),
+                os.path.join(os.path.dirname(dir_path), "tvshow.nfo")]
+
+    def __is_torrent_scraped(self, torrent, downloader_id, lib_index):
+        """
+        判断种子的媒体文件是否已全部硬链接进媒体库且已刮削
+
+        种子里每个媒体文件都必须在库中找到同 inode 的副本、且副本旁边有 .nfo，
+        才认为已刮削。任一不满足即返回 False（保守：宁可留着任务也不误删）。
+        """
+        if not lib_index:
+            return False
+        # qB 的 save_path 是保存目录，文件列表里的 name 是相对该目录的路径
+        save_path = torrent.get("save_path")
+        if not save_path:
+            return False
+        download_dir = self.get_downloader_conf(downloader_id).get("download_dir")
+        save_path, _ = self.__get_client(downloader_id).get_replace_path(path=save_path,
+                                                                        downloaddir=download_dir)
+        if not save_path:
+            return False
+        files = self.get_files(tid=torrent.get("id"), downloader_id=downloader_id) or []
+        if not files:
+            return False
+        lib_paths = []
+        for file in files:
+            file_name = file.get("name")
+            if not file_name:
+                continue
+            # 只校验媒体文件，字幕等附属文件不参与
+            if os.path.splitext(file_name)[1].lower() not in RMT_MEDIAEXT:
+                continue
+            lib_paths.append(os.path.join(save_path, file_name).replace('\\', '/'))
+        if not lib_paths:
+            return False
+        for path in lib_paths:
+            try:
+                inode = os.stat(path).st_ino
+            except OSError:
+                return False
+            entries = lib_index.get(inode)
+            if not entries:
+                return False
+            if not any(os.path.exists(nfo) for nfo in self.__get_nfo_paths(entries[0][1])):
+                return False
+        return True
 
     def get_downloading_torrents(self, downloader_id=None, ids=None, tag=None):
         """

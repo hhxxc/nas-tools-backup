@@ -346,7 +346,9 @@ class Qbittorrent(_IDownloadClient):
                 "id": torrent.hash,
                 "name": torrent.name,
                 "site": StringUtils.get_url_sld(torrent.tracker),
-                "size": torrent.size
+                "size": torrent.size,
+                "save_path": torrent.save_path,
+                "content_path": torrent.content_path
             })
             remove_torrents_ids.append(torrent.hash)
         if config.get("samedata") and remove_torrents:
@@ -360,7 +362,9 @@ class Qbittorrent(_IDownloadClient):
                             "id": torrent.hash,
                             "name": torrent.name,
                             "site": StringUtils.get_url_sld(torrent.tracker),
-                            "size": torrent.size
+                            "size": torrent.size,
+                            "save_path": torrent.save_path,
+                            "content_path": torrent.content_path
                         })
             remove_torrents_plus += remove_torrents
             return remove_torrents_plus

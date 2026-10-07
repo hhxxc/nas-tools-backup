@@ -198,10 +198,15 @@ class TorrentRemover(object):
         else:
             samedata = int(samedata)
         onlynastool = data.get("onlynastool")
-        if not str(enabled).isdigit() or int(onlynastool) not in [0, 1]:
+        if not str(onlynastool).isdigit() or int(onlynastool) not in [0, 1]:
             return False, "仅处理NASTOOL添加种子参数不合法"
         else:
             onlynastool = int(onlynastool)
+        only_scraped = data.get("only_scraped") or 0
+        if not str(only_scraped).isdigit() or int(only_scraped) not in [0, 1]:
+            return False, "仅处理已刮削种子参数不合法"
+        else:
+            only_scraped = int(only_scraped)
         ratio = data.get("ratio") or 0
         if not str(ratio).replace(".", "").isdigit():
             return False, "分享率参数不合法"
@@ -268,6 +273,7 @@ class TorrentRemover(object):
             "qb_category": qb_category,
             "tr_state": tr_state,
             "tr_error_key": tr_error_key,
+            "only_scraped": only_scraped,
         }
         if tid:
             self.dbhelper.delete_torrent_remove_task(tid=tid)

@@ -2296,6 +2296,7 @@ class TorrentRemoverTaskUpdate(ClientResource):
     parser.add_argument('samedata', type=int, help='处理辅种（0-否/1-是）', location='form', required=True)
     parser.add_argument('onlynastool', type=int, help='只管理NAStool添加的下载（0-否/1-是）', location='form',
                         required=True)
+    parser.add_argument('only_scraped', type=int, help='只处理已刮削的种子（0-否/1-是）', location='form')
     parser.add_argument('ratio', type=float, help='分享率', location='form')
     parser.add_argument('seeding_time', type=int, help='做种时间（小时）', location='form')
     parser.add_argument('upload_avs', type=int, help='平均上传速度（KB/S）', location='form')

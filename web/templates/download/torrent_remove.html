@@ -104,6 +104,9 @@
               {% if Attr.samedata %}
                 <span class="badge mb-1">处理辅种</span>
               {% endif %}
+              {% if Attr.config.only_scraped %}
+                <span class="badge mb-1 bg-green">仅已刮削</span>
+              {% endif %}
               </div>
             </div>
             <div class="datagrid-item">
@@ -323,6 +326,16 @@
           </div>
           <div class="col-lg-4">
             <div class="mb-3">
+              <label class="form-label">仅已刮削 <span class="form-help" title="只处理已硬链接进媒体库且已生成nfo的种子，避免删除还没整理入库的任务。开启后需逐个种子核对文件，速度较慢"
+                  data-bs-toggle="tooltip">?</span></label>
+              <select class="form-select" id="torrent_remove_only_scraped">
+                <option value="0" selected>否</option>
+                <option value="1">是</option>
+              </select>
+            </div>
+          </div>
+          <div class="col-lg-4">
+            <div class="mb-3">
               <label class="form-label">种子大小 <span class="form-help" title="种子大小在设置范围内视为满足该条件，留空为不启用"
                 data-bs-toggle="tooltip">?</span></label>
               <input type="text" id="torrent_remove_size" class="form-control" placeholder="GB，例如如1-10">
@@ -463,6 +476,7 @@
     $("#torrent_remove_enabled").val('0');
     $("#torrent_remove_samedata").val('0');
     $("#torrent_remove_onlynastool").val('1');
+    $("#torrent_remove_only_scraped").val('0');
     $("#torrent_remove_size").val('');
     $("#torrent_remove_ratio").val('');
     $("#torrent_remove_seeding_time").val('');
@@ -504,6 +518,7 @@
         $("#torrent_remove_enabled").val(ret.detail.enabled);
         $("#torrent_remove_samedata").val(ret.detail.samedata);
         $("#torrent_remove_onlynastool").val(ret.detail.onlynastool);
+        $("#torrent_remove_only_scraped").val(ret.detail.config.only_scraped || 0);
         if (ret.detail.config.size.length) {
           let minsize = ret.detail.config.size[0];
           let maxsize = ret.detail.config.size[1];
