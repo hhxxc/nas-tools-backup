@@ -139,7 +139,8 @@ class BrushTask(object):
                 "download_size": StringUtils.str_filesize(task.DOWNLOAD_SIZE),
                 "upload_size": StringUtils.str_filesize(task.UPLOAD_SIZE),
                 "lst_mod_date": task.LST_MOD_DATE,
-                "site_url": site_url
+                "site_url": site_url,
+                "site_tag": site_info.get("tags") if site_info else None
             }
 
     @staticmethod
@@ -365,6 +366,17 @@ class BrushTask(object):
                 # 当前任务种子详情
                 task_torrents = self.get_brushtask_torrents(taskid)
                 torrent_ids = [item.DOWNLOAD_ID for item in task_torrents if item.DOWNLOAD_ID]
+                # 认领「孤儿种子」：下载器里带着本任务标签、但 DB 里没有记录的种子。
+                # 这类种子（多为早期 bug 写入失败留下）会被 current_site_count 永久
+                # 计入上限，而按 DB 删除又永远认领不到 → 形成死锁。
+                # 只认严格的标签交集，不做前缀匹配，避免误删别的任务的种子。
+                orphan_ids = self.__get_orphan_torrent_ids(taskinfo=taskinfo,
+                                                           downloader_id=downloader_id,
+                                                           known_ids=torrent_ids)
+                if orphan_ids:
+                    log.info("【Brush】任务 %s 认领 %s 个无记录的孤儿种子（下载器中带本任务标签）：%s"
+                             % (task_name, len(orphan_ids), orphan_ids))
+                    torrent_ids = list(dict.fromkeys(torrent_ids + orphan_ids))
                 # 避免种子被全删，没有种子ID的不处理
                 if not torrent_ids:
                     continue
@@ -1159,6 +1171,48 @@ class BrushTask(object):
         ret = self.dbhelper.update_brushtask_state(tid=brushtask_id, state=state)
         self.init_config()
         return ret
+
+    def __get_orphan_torrent_ids(self, taskinfo, downloader_id, known_ids):
+        """
+        找出「下载器里带本任务标签、但 DB 中没有记录」的孤儿种子 ID
+
+        这类种子通常是早期 bug（如 qB 5.x 添加恒判失败）期间加进去的：
+        下载器里有、SITE_BRUSH_TORRENTS 里没有。它们会被 __get_task_count
+        按标签永久计入 current_site_count 上限，而按 DB 记录删除又永远认领不到，
+        任务就此卡死。这里把它们认领回来，交给正常的删种规则处理。
+
+        匹配策略取「本任务标签集合」与「种子标签」的**严格交集**，不做前缀匹配，
+        避免把其它任务（如 bz-mt2）的种子误认成自己的。
+
+        :param taskinfo: 任务配置
+        :param downloader_id: 下载器 ID
+        :param known_ids: 本任务在 DB 中已有记录的种子 ID
+        :return: 孤儿种子 ID 列表（失败时返回空列表，不影响正常刷流）
+        """
+        if not downloader_id:
+            return []
+        try:
+            # 与 __is_allow_new_torrent 的口径保持一致：任务标签 + 站点标签
+            label = list(set((taskinfo.get("label").split(',') if taskinfo.get("label") else []) +
+                             (taskinfo.get("site_tag").split(',') if taskinfo.get("site_tag") else [])))
+            label = [item.strip() for item in label if item and item.strip()]
+            if not label:
+                # 没有标签就无法界定归属，不认领任何种子
+                return []
+            known = set(known_ids or [])
+            orphan_ids = []
+            for tag in label:
+                for torrent in self.downloader.get_torrents(downloader_id=downloader_id,
+                                                            tag=[tag]) or []:
+                    torrent_id = torrent.get("hash") if isinstance(torrent, dict) \
+                        else str(torrent.hashString)
+                    if torrent_id and torrent_id not in known:
+                        known.add(torrent_id)
+                        orphan_ids.append(torrent_id)
+            return orphan_ids
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            return []
 
     def get_brushtask_torrents(self, brush_id, active=True):
         """
