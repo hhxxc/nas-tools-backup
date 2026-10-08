@@ -103,9 +103,13 @@ class Sites:
             # 以ID存储
             self._siteByIds[site.ID] = site_info
             # 以域名存储
-            site_strict_url = StringUtils.get_url_domain(site.SIGNURL or site.RSSURL)
-            if site_strict_url:
-                self._siteByUrls[site_strict_url] = site_info
+            # 一个站点可能有多个域名（如馒头 signurl=kp.m-team.cc、
+            # rssurl=rss.m-team.cc），按 URL 反查站点时两个都要能命中，
+            # 否则拿不到该站的 proxy/cookie/ua。
+            for _u in (site.SIGNURL, site.RSSURL):
+                _domain = StringUtils.get_url_domain(_u)
+                if _domain:
+                    self._siteByUrls[_domain] = site_info
             # 初始化站点限速器
             self._limiters[site.ID] = SiteRateLimiter(
                 limit_interval=int(site_note.get("limit_interval")) * 60 if site_note.get("limit_interval") and str(

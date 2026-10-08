@@ -333,8 +333,13 @@ class Downloader:
             if url.startswith("magnet:"):
                 content = url
             else:
-                # 获取Cookie和ua等
+                # 获取Cookie和ua等；下载地址可能不在站点配置的域名里
+                # （如馒头种子地址是 rss.m-team.cc，站点只配了 kp.m-team.cc），
+                # 按域名查不到就退回按站点名查，否则会丢掉 proxy/cookie/ua
                 site_info = self.sites.get_sites(siteurl=url)
+                if not site_info and media_info.site:
+                    _by_name = self.sites.get_sites_by_name(media_info.site)
+                    site_info = _by_name[0] if _by_name else {}
                 # 下载种子文件，并读取信息
                 _, content, dl_files_folder, dl_files, retmsg = Torrent().get_torrent_info(
                     url=url,
