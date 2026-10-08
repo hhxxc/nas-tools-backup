@@ -19,3 +19,7 @@ package.json
 _*.py
 _*.sh
 _*.txt
+# exploratory screenshots + local tool config (not project code)
+*.png
+.claude/
+.qoder/

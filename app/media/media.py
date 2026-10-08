@@ -437,8 +437,33 @@ class Media:
                             return tv_info
         return {}
 
-    @staticmethod
-    def __is_tv_season_air_year(tv_info, media_year, season_number):
+    def __get_tmdb_tv_season_air_years(self, tv_info, season_num):
+        """
+        取某季「实际播出的年份集合」（按该季每集的 air_date 统计）
+
+        美剧常在秋季首播、跨年播完（如 The 100 S2：2014-10-22 起播，次年 3 月完结），
+        而 TMDB 只把首播日记在季的 air_date 上，所以只比首播年会把
+        以「结束年」命名的整季包（如 'The 100 S02 2015'）判错。
+        :param tv_info: TMDB 的剧集详情
+        :param season_num: 季序号（整数）
+        :return: 年份字符串集合；查不到时为空集合
+        """
+        tmdbid = (tv_info or {}).get("id")
+        if not tmdbid:
+            return set()
+        try:
+            episodes = self.get_tmdb_season_episodes(tmdbid=tmdbid, season=season_num) or []
+        except Exception as e:
+            log.error(f"【Meta】查询TMDB季集出错：{e}")
+            return set()
+        years = set()
+        for episode in episodes:
+            air_date = str(episode.get("air_date") or "")
+            if air_date[0:4].isdigit():
+                years.add(air_date[0:4])
+        return years
+
+    def __is_tv_season_air_year(self, tv_info, media_year, season_number):
         """
         判断某部剧的第N季是否在 media_year 年播出
 
@@ -454,6 +479,9 @@ class Media:
             return False
         try:
             season_num = int(season_number)
+        except (TypeError, ValueError):
+            return False
+        try:
             target = None
             for season in Media.get_tmdb_tv_seasons(tv_info=tv_info):
                 if season.get("season_number") is None:
@@ -469,9 +497,14 @@ class Media:
                 # 第一季的播出年就是首播年：缺该季 air_date 时用首播年兜底，
                 # 避免因 TMDB 数据缺失把本来能识别的资源拒掉。
                 air_date = tv_info.get("first_air_date")
-            if not air_date:
-                return False
-            return str(air_date)[0:4] == str(media_year)
+            if air_date and str(air_date)[0:4] == str(media_year):
+                # 首播年命中即返回，避免给常规资源多打一次季集接口
+                return True
+            # 首播年不匹配：该季可能跨年播出，按实际播出年份集合再判一次
+            air_years = self.__get_tmdb_tv_season_air_years(tv_info, season_num)
+            if air_years:
+                return str(media_year) in air_years
+            return False
         except Exception as e1:
             log.error(f"【Meta】连接TMDB出错：{e1}")
             return False
