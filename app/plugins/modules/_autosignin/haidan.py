@@ -8,7 +8,10 @@ class HaiDan(_ISiteSigninHandler):
     海胆签到
     """
     # 匹配的站点Url，每一个实现类都需要设置为自己的站点Url
-    site_url = "haidan.video"
+    site_url = "haidan.cc"
+    # 站点换过域名（原 haidan.video 已过期停放，现为 haidan.cc），
+    # 两个都匹配，避免老配置回落到通用签到而重复判定
+    _site_urls = ("haidan.cc", "haidan.video")
 
     # 签到成功
     _succeed_regex = ['(?<=value=")已经打卡(?=")']
@@ -20,7 +23,7 @@ class HaiDan(_ISiteSigninHandler):
         :param url: 站点Url
         :return: 是否匹配，如匹配则会调用该类的signin方法
         """
-        return True if StringUtils.url_equal(url, cls.site_url) else False
+        return any(StringUtils.url_equal(url, item) for item in cls._site_urls)
 
     def signin(self, site_info: dict):
         """
@@ -33,11 +36,17 @@ class HaiDan(_ISiteSigninHandler):
         ua = site_info.get("ua")
         proxy = Config().get_proxies() if site_info.get("proxy") else None
 
-        # 签到
+        # 从站点配置取地址，不要写死域名：该站换过域名（haidan.video -> haidan.cc）
+        site_url = StringUtils.get_base_url(site_info.get("signurl") or site_info.get("rssurl"))
+        if not site_url:
+            self.error(f"签到失败，站点地址为空")
+            return False, f'【{site}】签到失败，站点地址为空'
+
+        # 签到：JS 里真实动作就是 GET signin.php（见 public/js/common.js 的 $.ajax）
         sign_res = RequestUtils(cookies=site_cookie,
                                 headers=ua,
                                 proxies=proxy
-                                ).get_res(url="https://www.haidan.video/signin.php")
+                                ).get_res(url="%s/signin.php" % site_url)
         if not sign_res or sign_res.status_code != 200:
             self.error(f"签到失败，请检查站点连通性")
             return False, f'【{site}】签到失败，请检查站点连通性'
