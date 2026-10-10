@@ -186,16 +186,16 @@ function render_logging(log_list) {
     }
     if (tbody) {
       let logging_table_obj = $("#logging_table");
-      let bool_ToScrolTop = (logging_table_obj.scrollTop() + logging_table_obj.prop("offsetHeight")) >= logging_table_obj.prop("scrollHeight");
+      // 判断用户是否在底部（留 60px 容差，避免高刷日志下判断永远落后）
+      let at_bottom = (logging_table_obj.scrollTop() + logging_table_obj.prop("offsetHeight")) >= (logging_table_obj.prop("scrollHeight") - 60);
       let logging_content = $("#logging_content");
       if (logging_content.text().indexOf("刷新中...") !== -1) {
         logging_content.empty();
       }
       logging_content.append(tbody);
-      if (bool_ToScrolTop) {
-        setTimeout(function () {
-          logging_table_obj.scrollTop(logging_table_obj.prop("scrollHeight"));
-        }, 500);
+      // 同步滚动：延迟滚动会在高频日志下产生竞态，导致自动滚动失效
+      if (at_bottom) {
+        logging_table_obj.scrollTop(logging_table_obj.prop("scrollHeight"));
       }
     }
   }
