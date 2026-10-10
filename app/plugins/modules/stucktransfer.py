@@ -323,7 +323,7 @@ class StuckTransfer(_IPluginModule):
                 log.error(f"【{self.module_name}】处理种子异常：{str(err)}")
 
         log.info(f"【{self.module_name}】例行检查完成：NASTOOL 种子 {checked} 个，"
-                 f"卡种 {stuck} 个，换源 {swapped} 个（卡种判定阈值 {self._stuck_hours:g} 小时）")
+                 f"卡种 {stuck} 个，换源 {swapped} 个（判定阈值 {self._stuck_hours:g}h · 检查间隔 {self._interval_min}min）")
 
     def __record_history(self, sub_name, torrent_name):
         """
