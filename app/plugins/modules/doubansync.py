@@ -115,6 +115,11 @@ class DoubanSync(_IPluginModule):
                     self._types = self._types.split(',')
             self._collect_action = config.get("collect_action") or "stop"
 
+            # 注入用户配置的豆瓣Cookie到DouBan单例（网页爬取路径 get_douban_wish 使用 self.douban.cookie）
+            if self._cookie:
+                self.douban.cookie = self._cookie
+                self.info("已注入插件配置的豆瓣Cookie（覆盖匿名Cookie）")
+
         # 停止现有任务
         self.stop_service()
 
