@@ -104,6 +104,7 @@ class FakeDb:
 
 
 helper.DbHelper = FakeDb
+helper.ThreadHelper = sys.modules["app.utils"].ThreadHelper  # 插件从 app.helper 导入
 fake_db = FakeDb()
 mod("app.message", Message=type("Message", (), {}))
 

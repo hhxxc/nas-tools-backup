@@ -255,17 +255,21 @@ class StuckTransfer(_IPluginModule):
             log.error(f"【{self.module_name}】获取下载器种子失败：{str(err)}")
             return
         if not torrents:
+            log.info(f"【{self.module_name}】例行检查：下载器中当前没有下载任务")
             return
 
         sub_map = self.__get_subscriptions()
         if not (sub_map[0] or sub_map[1]):
-            log.info(f"【{self.module_name}】当前没有有效订阅，跳过检查")
+            log.info(f"【{self.module_name}】例行检查：当前没有有效订阅，跳过")
             return
 
         exclude_tags = [t.strip() for t in self._exclude_tags.split(",") if t.strip()]
         now = time.time()
         stuck_deadline = now - self._stuck_hours * 3600
 
+        checked = 0
+        stuck = 0
+        swapped = 0
         for torrent in torrents:
             try:
                 tags = str(torrent.get("tags") or "")
@@ -273,6 +277,7 @@ class StuckTransfer(_IPluginModule):
                     continue
                 if any(tag in tags for tag in exclude_tags):
                     continue
+                checked += 1
 
                 state = torrent.get("state")
                 # 只处理仍在下载中的状态
@@ -294,11 +299,13 @@ class StuckTransfer(_IPluginModule):
                 sub = self.__resolve_subscription(torrent, sub_map)
                 if not sub:
                     continue
+                stuck += 1
                 rtype, rssid, year, sub_name = sub
 
                 log.info(f"【{self.module_name}】检测到卡种 {tname}，匹配订阅 {sub_name}，"
                          f"开始换源（删除种子{'及文件' if self._delete_file else ''}）")
                 if Downloader().delete_torrents(ids=[tid], delete_file=self._delete_file):
+                    swapped += 1
                     # 触发订阅重新搜索，洗版规则会筛选更优资源
                     if rtype == "MOV":
                         ThreadHelper().start_thread(Subscribe().subscribe_search_movie, (rssid,))
@@ -314,6 +321,9 @@ class StuckTransfer(_IPluginModule):
                     log.warn(f"【{self.module_name}】删除卡种失败：{tname}")
             except Exception as err:
                 log.error(f"【{self.module_name}】处理种子异常：{str(err)}")
+
+        log.info(f"【{self.module_name}】例行检查完成：NASTOOL 种子 {checked} 个，"
+                 f"卡种 {stuck} 个，换源 {swapped} 个（卡种判定阈值 {self._stuck_hours:g} 小时）")
 
     def __record_history(self, sub_name, torrent_name):
         """
