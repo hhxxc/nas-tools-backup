@@ -13,6 +13,7 @@ from app.utils import PathUtils
 from app.utils.commons import singleton
 from app.utils.http_utils import RequestUtils
 from app.utils.types import SystemConfigKey
+from app.plugins.mp_compat import analyze_plugin_compat, ensure_mp_compat
 from config import Config
 
 # 默认市场源，格式：名称|user/repo|branch
@@ -324,6 +325,22 @@ class RemotePluginHelper:
         # 下载插件文件
         if not self.__download_plugin_file(plugin):
             return False, "插件文件下载失败"
+        # 兼容度门禁：MP 专有依赖的插件拒绝安装
+        compat_level = None
+        file_path = os.path.join(self.remote_plugin_path, f"{plugin_id}.py")
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                code = f.read()
+            compat = analyze_plugin_compat(code)
+            compat_level = compat.get("level")
+            if compat_level == "mp_deep":
+                os.remove(file_path)
+                miss = "、".join(compat.get("missing")[:6])
+                return False, (
+                    "该插件依赖 MoviePilot 专有模块（%s），与 NASTool 不兼容，已拒绝安装。"
+                    "建议改用 NASTool 生态插件源。" % miss)
+        except FileNotFoundError:
+            pass
         # 安装依赖
         self.__install_requirements(plugin.get("requirements") or [])
         # 更新已安装列表
@@ -331,7 +348,8 @@ class RemotePluginHelper:
         installed[plugin_id] = {
             "version": plugin.get("version"),
             "installed_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "source": plugin.get("source_name") or plugin.get("source_repo")
+            "source": plugin.get("source_name") or plugin.get("source_repo"),
+            "compat": compat_level
         }
         self.__save_installed(installed)
         log.info(f"【RemotePlugin】远程插件 {plugin.get('name')} 安装成功")
@@ -392,6 +410,13 @@ class RemotePluginHelper:
         self.clear_pycache(plugin_id)
         try:
             import importlib.util
+            # 加载前按需注入 MP 兼容 shim（幂等）
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    compat = analyze_plugin_compat(f.read())
+                ensure_mp_compat(compat.get("level"))
+            except Exception as err:
+                log.warn(f"【RemotePlugin】兼容扫描失败（忽略，直接加载）：{str(err)}")
             spec = importlib.util.spec_from_file_location(plugin_id, file_path)
             module = importlib.util.module_from_spec(spec)
             sys.modules[plugin_id] = module
