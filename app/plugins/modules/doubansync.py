@@ -40,7 +40,7 @@ class DoubanSync(_IPluginModule):
     # 插件版本
     module_version = "2.0"
     # 插件作者
-    module_author = "jxxghp"
+    module_author = "hhxxc"
     # 作者主页
     author_url = "https://github.com/jxxghp"
     # 插件配置项ID前缀
