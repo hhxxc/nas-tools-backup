@@ -1,0 +1,73 @@
+{% import 'macro/svg.html' as SVG %}
+<div class="container-xl">
+  <!-- Page title -->
+  <div class="page-header d-print-none">
+    <div class="row align-items-center">
+      <div class="col">
+        <h2 class="page-title">
+          第三方插件市场
+        </h2>
+      </div>
+      <div class="col-auto ms-auto d-print-none">
+        <div class="btn-list">
+          <a href="javascript:refresh_remote_plugins()" class="btn btn-primary d-none d-sm-inline-block">
+            {{ SVG.refresh('me-2') }}
+            刷新清单
+          </a>
+          <a href="javascript:navmenu('plugin')" class="btn d-none d-sm-inline-block">
+            返回插件页
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- 市场源配置 -->
+<div class="container-xl">
+  <div class="card rounded-3 mb-3">
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label">市场源 <span class="text-muted">（每行一个：名称|user/repo|branch）</span></label>
+          <textarea class="form-control" id="remote_market_sources" rows="3"
+                    placeholder="MoviePilot官方|jxxghp/MoviePilot-Plugins|main"></textarea>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary" onclick="save_remote_market_sources()">保存市场源</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- 远程插件列表 -->
+<div class="page-body">
+  <div class="container-xl">
+    <div class="d-grid gap-3 grid-normal-card align-items-start" id="remote_plugins_content">
+    </div>
+  </div>
+</div>
+<!-- 风险确认弹窗 -->
+<div class="modal modal-blur fade" id="modal-remote-risk" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog modal-sm modal-dialog-centered" role="document">
+    <div class="modal-content">
+      <div class="modal-body">
+        <div class="modal-title">安装风险确认</div>
+        <div class="text-muted mt-2">
+          第三方远程插件由社区开发者提供，未经官方审核，可能存在安全风险，
+          插件代码将在本机执行。确认继续安装吗？
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-link link-secondary me-auto" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-danger" id="remote_risk_btn">确认安装</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script type="text/javascript" src="../static/js/remote_plugin_market.js"></script>
+<script type="text/javascript">
+  $(document).ready(function(){
+    fresh_tooltip();
+    load_remote_plugins();
+  });
+</script>

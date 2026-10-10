@@ -194,6 +194,9 @@ class Config(object):
     def get_user_plugin_path(self):
         return os.path.join(self.get_config_path(), "plugins")
 
+    def get_remote_plugin_path(self):
+        return os.path.join(self.get_config_path(), "plugins_remote")
+
     def get_domain(self):
         domain = (self.get_config('app') or {}).get('domain')
         if domain and not domain.startswith('http'):

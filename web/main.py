@@ -1100,6 +1100,13 @@ def plugin():
                            Count=len(Plugins))
 
 
+# 第三方插件市场页面
+@App.route('/remote_plugin_market', methods=['POST', 'GET'])
+@login_required
+def remote_plugin_market():
+    return render_template("setting/remote_plugin_market.html")
+
+
 # 事件响应
 @App.route('/do', methods=['POST'])
 @action_login_check

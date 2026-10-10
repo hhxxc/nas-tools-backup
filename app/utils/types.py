@@ -172,6 +172,12 @@ class SystemConfigKey(Enum):
     UserInstalledPlugins = "UserInstalledPlugins"
     # 已安装插件汇报状态
     UserInstalledPluginsReport = "UserInstalledPluginsReport"
+    # 第三方远程插件清单缓存
+    UserRemotePlugins = "UserRemotePlugins"
+    # 已安装的第三方远程插件 {id: {version, installed_time, source}}
+    UserInstalledRemotePlugins = "UserInstalledRemotePlugins"
+    # 第三方插件市场源配置
+    UserRemoteMarketSources = "UserRemoteMarketSources"
     # 括削配置
     UserScraperConf = "UserScraperConf"
     # 索引站点

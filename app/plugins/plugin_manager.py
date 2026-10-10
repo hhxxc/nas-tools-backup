@@ -6,6 +6,7 @@ import log
 from app.conf import SystemConfig
 from app.helper import SubmoduleHelper
 from app.plugins.event_manager import EventManager
+from app.plugins.remote_plugin_helper import RemotePluginHelper
 from app.utils import SystemUtils, PathUtils, ImageUtils
 from app.utils.commons import singleton
 from app.utils.types import SystemConfigKey
@@ -29,6 +30,10 @@ class PluginManager:
     _plugins = {}
     # 运行态插件列表
     _running_plugins = {}
+    # 远程插件列表 {id: 模块类}
+    _remote_plugins = {}
+    # 运行态远程插件列表 {id: 实例}
+    _running_remote_plugins = {}
     # 配置Key
     _config_key = "plugin.%s"
     # 事件处理线程
@@ -76,6 +81,8 @@ class PluginManager:
         """
         # 加载插件
         self.__load_plugins()
+        # 加载远程插件
+        self.__load_remote_plugins()
         # 将事件管理器设为启动
         self._active = True
         self._thread = Thread(target=self.__run)
@@ -121,6 +128,81 @@ class PluginManager:
             self.reload_plugin(module_id)
             log.info(f"加载插件：{plugin}")
 
+    def __load_remote_plugins(self):
+        """
+        启动时加载所有已安装的远程插件，失败项隔离不阻断
+        """
+        self._running_remote_plugins = {}
+        self._remote_plugins = {}
+        installed = self.systemconfig.get(SystemConfigKey.UserInstalledRemotePlugins) or {}
+        for plugin_id in installed.keys():
+            try:
+                if not self.load_remote_plugin(plugin_id):
+                    log.error(f"【RemotePlugin】加载远程插件失败：{plugin_id}")
+            except Exception as err:
+                log.error(f"【RemotePlugin】加载远程插件出错 {plugin_id}：{str(err)} - {traceback.format_exc()}")
+
+    def load_remote_plugin(self, plugin_id):
+        """
+        加载并启动一个远程插件
+        :return: True/False
+        """
+        if not plugin_id:
+            return False
+        # 动态加载模块
+        module = RemotePluginHelper().load_remote_plugin_module(plugin_id)
+        if not module:
+            return False
+        plugin_class = getattr(module, plugin_id, None)
+        if not plugin_class:
+            # 找不到同名类时，遍历查找带 module_name 属性的类
+            for attr in dir(module):
+                obj = getattr(module, attr)
+                if isinstance(obj, type) and hasattr(obj, "module_name") and not attr.startswith("_"):
+                    plugin_class = obj
+                    break
+        if not plugin_class:
+            log.error(f"【RemotePlugin】插件类不存在：{plugin_id}")
+            return False
+        # 实例化
+        instance = plugin_class()
+        self._remote_plugins[plugin_id] = plugin_class
+        self._running_remote_plugins[plugin_id] = instance
+        # 初始化配置
+        if hasattr(instance, "init_config"):
+            try:
+                instance.init_config(self.get_remote_plugin_config(plugin_id))
+            except Exception as err:
+                log.error(f"【RemotePlugin】初始化插件配置出错 {plugin_id}：{str(err)}")
+        log.info(f"【RemotePlugin】加载远程插件：{plugin_id}")
+        return True
+
+    def unload_remote_plugin(self, plugin_id):
+        """
+        卸载并停止一个远程插件
+        """
+        instance = self._running_remote_plugins.get(plugin_id)
+        if instance and hasattr(instance, "stop_service"):
+            try:
+                instance.stop_service()
+            except Exception as err:
+                log.error(f"【RemotePlugin】停止插件出错 {plugin_id}：{str(err)}")
+        # 移除模块缓存
+        import sys
+        sys.modules.pop(plugin_id, None)
+        # 清理pycache
+        RemotePluginHelper().clear_pycache(plugin_id)
+        # 移除列表
+        self._running_remote_plugins.pop(plugin_id, None)
+        self._remote_plugins.pop(plugin_id, None)
+        log.info(f"【RemotePlugin】远程插件已卸载：{plugin_id}")
+
+    def get_remote_plugin_config(self, pid):
+        """
+        获取远程插件配置
+        """
+        return self.systemconfig.get(self._config_key % pid) or {}
+
     def run_plugin(self, pid, method, *args, **kwargs):
         """
         运行插件
@@ -147,7 +229,7 @@ class PluginManager:
                 self._running_plugins[pid].init_config(self.get_plugin_config(pid))
                 log.debug(f"生效插件配置：{pid}")
             except Exception as err:
-                print(str(err))
+                log.error(f"【RemotePlugin】停止远程插件出错：{str(err)}")
 
     def __stop_plugins(self):
         """
@@ -156,12 +238,19 @@ class PluginManager:
         for plugin in self._running_plugins.values():
             if hasattr(plugin, "stop_service"):
                 plugin.stop_service()
+        # 停止所有远程插件
+        for plugin in self._running_remote_plugins.values():
+            if hasattr(plugin, "stop_service"):
+                try:
+                    plugin.stop_service()
+                except Exception as err:
+                    print(str(err))
 
     def get_plugin_config(self, pid):
         """
         获取插件配置
         """
-        if not self._plugins.get(pid):
+        if not self._plugins.get(pid) and not self._remote_plugins.get(pid):
             return {}
         return self.systemconfig.get(self._config_key % pid) or {}
 
@@ -170,8 +259,11 @@ class PluginManager:
         获取插件额外页面数据
         :return: 标题，页面内容，确定按钮响应函数
         """
-        if not self._running_plugins.get(pid):
+        if not self._running_plugins.get(pid) and not self._running_remote_plugins.get(pid):
             return None, None, None
+        if not self._running_plugins.get(pid):
+            plugin = self._running_remote_plugins.get(pid)
+            return plugin.get_page()
         if not hasattr(self._running_plugins[pid], "get_page"):
             return None, None, None
         return self._running_plugins[pid].get_page()
@@ -180,8 +272,11 @@ class PluginManager:
         """
         获取插件额外脚本
         """
-        if not self._running_plugins.get(pid):
+        if not self._running_plugins.get(pid) and not self._running_remote_plugins.get(pid):
             return None
+        if not self._running_plugins.get(pid):
+            plugin = self._running_remote_plugins.get(pid)
+            return plugin.get_script() if hasattr(plugin, "get_script") else None
         if not hasattr(self._running_plugins[pid], "get_script"):
             return None
         return self._running_plugins[pid].get_script()
@@ -190,8 +285,11 @@ class PluginManager:
         """
         获取插件状态
         """
-        if not self._running_plugins.get(pid):
+        if not self._running_plugins.get(pid) and not self._running_remote_plugins.get(pid):
             return None
+        if not self._running_plugins.get(pid):
+            plugin = self._running_remote_plugins.get(pid)
+            return plugin.get_state() if hasattr(plugin, "get_state") else None
         if not hasattr(self._running_plugins[pid], "get_state"):
             return None
         return self._running_plugins[pid].get_state()
@@ -262,6 +360,33 @@ class PluginManager:
             conf.update({"state": plugin.get_state()})
             # 汇总
             all_confs[pid] = conf
+        # 合并运行态远程插件
+        for pid, plugin in self._running_remote_plugins.items():
+            conf = {}
+            # 权限
+            if hasattr(plugin, "auth_level") \
+                    and plugin.auth_level > auth_level:
+                continue
+            if hasattr(plugin, "module_name"):
+                conf.update({"name": plugin.module_name})
+            if hasattr(plugin, "module_desc"):
+                conf.update({"desc": plugin.module_desc})
+            if hasattr(plugin, "module_version"):
+                conf.update({"version": plugin.module_version})
+            if hasattr(plugin, "module_icon"):
+                conf.update({"icon": plugin.module_icon})
+            if hasattr(plugin, "module_config_prefix"):
+                conf.update({"prefix": plugin.module_config_prefix})
+            if hasattr(plugin, "get_page"):
+                title, _, _ = plugin.get_page()
+                conf.update({"page": title})
+            if hasattr(plugin, "get_script"):
+                conf.update({"script": plugin.get_script()})
+            conf.update({"color": self.__get_plugin_color(plugin)})
+            conf.update({"fields": plugin.get_fields() or {}})
+            conf.update({"config": self.get_remote_plugin_config(pid)})
+            conf.update({"state": plugin.get_state()})
+            all_confs[pid] = conf
         return all_confs
 
     def get_plugin_apps(self, auth_level):
@@ -305,6 +430,31 @@ class PluginManager:
                 conf.update({"author_url": plugin.author_url})
             # 汇总
             all_confs[pid] = conf
+        # 合并远程插件
+        installed_remote = self.systemconfig.get(SystemConfigKey.UserInstalledRemotePlugins) or {}
+        for pid, plugin in self._remote_plugins.items():
+            conf = {}
+            if hasattr(plugin, "auth_level") \
+                    and plugin.auth_level > auth_level:
+                continue
+            conf.update({"id": pid})
+            conf.update({"installed": pid in installed_remote})
+            if hasattr(plugin, "module_name"):
+                conf.update({"name": plugin.module_name})
+            if hasattr(plugin, "module_desc"):
+                conf.update({"desc": plugin.module_desc})
+            if hasattr(plugin, "module_version"):
+                conf.update({"version": plugin.module_version})
+            if hasattr(plugin, "module_icon"):
+                conf.update({"icon": plugin.module_icon})
+            conf.update({"color": self.__get_plugin_color(plugin)})
+            if hasattr(plugin, "module_author"):
+                conf.update({"author": plugin.module_author})
+            if hasattr(plugin, "author_url"):
+                conf.update({"author_url": plugin.author_url})
+            # 标记为远程插件
+            conf.update({"remote": True})
+            all_confs[pid] = conf
         return all_confs
 
     def get_plugin_commands(self):
@@ -327,7 +477,16 @@ class PluginManager:
         """
         运行插件方法
         """
+        if not self._running_plugins.get(pid) and not self._running_remote_plugins.get(pid):
+            return None
         if not self._running_plugins.get(pid):
+            plugin = self._running_remote_plugins.get(pid)
+            if not hasattr(plugin, method):
+                return None
+            try:
+                return getattr(plugin, method)(*args, **kwargs)
+            except Exception as err:
+                print(str(err), traceback.format_exc())
             return None
         if not hasattr(self._running_plugins[pid], method):
             return None

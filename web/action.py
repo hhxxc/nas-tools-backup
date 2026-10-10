@@ -34,6 +34,7 @@ from app.media.meta import MetaInfo, MetaBase
 from app.mediaserver import MediaServer
 from app.message import Message, MessageCenter
 from app.plugins import PluginManager, EventManager
+from app.plugins.remote_plugin_helper import RemotePluginHelper
 from app.rss import Rss
 from app.rsschecker import RssChecker
 from app.scheduler import Scheduler
@@ -236,6 +237,13 @@ class WebAction:
             "get_ical_events": self.get_ical_events,
             "install_plugin": self.install_plugin,
             "uninstall_plugin": self.uninstall_plugin,
+            "install_remote_plugin": self.install_remote_plugin,
+            "uninstall_remote_plugin": self.uninstall_remote_plugin,
+            "update_remote_plugin": self.update_remote_plugin,
+            "get_remote_plugins": self.get_remote_plugins,
+            "refresh_remote_plugins": self.refresh_remote_plugins,
+            "save_remote_market_sources": self.save_remote_market_sources,
+            "confirm_remote_risk": self.confirm_remote_risk,
             "get_plugin_apps": self.get_plugin_apps,
             "get_plugin_page": self.get_plugin_page,
             "get_plugin_state": self.get_plugin_state,
@@ -5567,6 +5575,110 @@ class WebAction:
         # 重新加载插件
         PluginManager().init_config()
         return {"code": 0, "msg": "插件卸载功"}
+
+    @staticmethod
+    def get_remote_plugins(data=None):
+        """
+        获取第三方远程插件清单（合并已安装/本地版本标记）
+        """
+        try:
+            helper = RemotePluginHelper()
+            plugins = helper.get_remote_plugins()
+            installed = SystemConfig().get(SystemConfigKey.UserInstalledRemotePlugins) or {}
+            for pid, plugin in plugins.items():
+                local = installed.get(pid) or {}
+                plugin.update({
+                    "installed": pid in installed,
+                    "local_version": local.get("version") or "",
+                    "installed_time": local.get("installed_time") or "",
+                    "has_new": helper.compare_version(
+                        local.get("version") or "0", plugin.get("version"))
+                    if local else False
+                })
+            return {
+                "code": 0,
+                "sources": helper.get_market_sources(),
+                "plugins": plugins,
+                "risk_confirmed": helper.get_risk_confirmed()
+            }
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            return {"code": -1, "msg": f"获取远程插件失败：{str(e)}"}
+
+    @staticmethod
+    def refresh_remote_plugins(data=None):
+        """
+        强制刷新远程插件清单
+        """
+        try:
+            plugins = RemotePluginHelper().get_remote_plugins(refresh=True)
+            return {"code": 0, "msg": f"刷新成功，共 {len(plugins)} 个插件"}
+        except Exception as e:
+            ExceptionUtils.exception_traceback(e)
+            return {"code": -1, "msg": f"刷新失败：{str(e)}"}
+
+    @staticmethod
+    def save_remote_market_sources(data):
+        """
+        保存第三方插件市场源配置
+        """
+        sources = data.get("sources") or []
+        if not isinstance(sources, list):
+            return {"code": -1, "msg": "参数错误"}
+        RemotePluginHelper().save_market_sources(sources)
+        return {"code": 0, "msg": "市场源保存成功"}
+
+    @staticmethod
+    def confirm_remote_risk(data=None):
+        """
+        记录第三方插件风险确认
+        """
+        RemotePluginHelper().confirm_risk()
+        return {"code": 0, "msg": ""}
+
+    @staticmethod
+    def install_remote_plugin(data):
+        """
+        安装第三方远程插件
+        """
+        module_id = data.get("id")
+        if not module_id:
+            return {"code": -1, "msg": "参数错误"}
+        flag, msg = RemotePluginHelper().install_remote_plugin(module_id)
+        if not flag:
+            return {"code": -1, "msg": msg}
+        # 加载远程插件
+        if not PluginManager().load_remote_plugin(module_id):
+            return {"code": -1, "msg": "插件文件已下载，但加载失败，请查看日志"}
+        return {"code": 0, "msg": msg}
+
+    @staticmethod
+    def uninstall_remote_plugin(data):
+        """
+        卸载第三方远程插件
+        """
+        module_id = data.get("id")
+        if not module_id:
+            return {"code": -1, "msg": "参数错误"}
+        # 停止运行并移除
+        PluginManager().unload_remote_plugin(module_id)
+        flag, msg = RemotePluginHelper().uninstall_remote_plugin(module_id)
+        if not flag:
+            return {"code": -1, "msg": msg}
+        return {"code": 0, "msg": msg}
+
+    @staticmethod
+    def update_remote_plugin(data):
+        """
+        更新第三方远程插件
+        """
+        module_id = data.get("id")
+        if not module_id:
+            return {"code": -1, "msg": "参数错误"}
+        flag, msg = RemotePluginHelper().update_remote_plugin(module_id)
+        if not flag:
+            return {"code": -1, "msg": msg}
+        return {"code": 0, "msg": msg}
 
     @staticmethod
     def get_plugin_apps():
