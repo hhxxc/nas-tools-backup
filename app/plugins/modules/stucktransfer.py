@@ -232,7 +232,7 @@ class StuckTransfer(_IPluginModule):
                 if title and self.__normalize(title) in by_name:
                     return by_name[self.__normalize(title)]
         except Exception as err:
-            log.warn(f"【{self.module_name}】查询下载历史失败，降级为名称匹配：{str(err)}")
+            self.warn(f"查询下载历史失败，降级为名称匹配：{str(err)}")
 
         # 2) 兜底：种子名归一化匹配订阅名（中文名不一致时匹配不到，仅作补充）
         tnorm = self.__normalize(tname)
@@ -252,15 +252,15 @@ class StuckTransfer(_IPluginModule):
         try:
             torrents = Downloader().get_torrents() or []
         except Exception as err:
-            log.error(f"【{self.module_name}】获取下载器种子失败：{str(err)}")
+            self.error(f"获取下载器种子失败：{str(err)}")
             return
         if not torrents:
-            log.info(f"【{self.module_name}】例行检查：下载器中当前没有下载任务")
+            self.info(f"例行检查：下载器中当前没有下载任务")
             return
 
         sub_map = self.__get_subscriptions()
         if not (sub_map[0] or sub_map[1]):
-            log.info(f"【{self.module_name}】例行检查：当前没有有效订阅，跳过")
+            self.info(f"例行检查：当前没有有效订阅，跳过")
             return
 
         exclude_tags = [t.strip() for t in self._exclude_tags.split(",") if t.strip()]
@@ -302,8 +302,8 @@ class StuckTransfer(_IPluginModule):
                 stuck += 1
                 rtype, rssid, year, sub_name = sub
 
-                log.info(f"【{self.module_name}】检测到卡种 {tname}，匹配订阅 {sub_name}，"
-                         f"开始换源（删除种子{'及文件' if self._delete_file else ''}）")
+                self.info(f"检测到卡种 {tname}，匹配订阅 {sub_name}，"
+                          f"开始换源（删除种子{'及文件' if self._delete_file else ''}）")
                 if Downloader().delete_torrents(ids=[tid], delete_file=self._delete_file):
                     swapped += 1
                     # 触发订阅重新搜索，洗版规则会筛选更优资源
@@ -318,12 +318,12 @@ class StuckTransfer(_IPluginModule):
                             text=f"订阅：{sub_name}\n卡种：{tname}\n"
                                  f"已删除并重新搜索下载")
                 else:
-                    log.warn(f"【{self.module_name}】删除卡种失败：{tname}")
+                    self.warn(f"删除卡种失败：{tname}")
             except Exception as err:
-                log.error(f"【{self.module_name}】处理种子异常：{str(err)}")
+                self.error(f"处理种子异常：{str(err)}")
 
-        log.info(f"【{self.module_name}】例行检查完成：NASTOOL 种子 {checked} 个，"
-                 f"卡种 {stuck} 个，换源 {swapped} 个（判定阈值 {self._stuck_hours:g}h · 检查间隔 {self._interval_min}min）")
+        self.info(f"例行检查完成：NASTOOL 种子 {checked} 个，"
+                  f"卡种 {stuck} 个，换源 {swapped} 个（判定阈值 {self._stuck_hours:g}h · 检查间隔 {self._interval_min}min）")
 
     def __record_history(self, sub_name, torrent_name):
         """
@@ -336,7 +336,7 @@ class StuckTransfer(_IPluginModule):
                                 "delete_file": self._delete_file,
                                 "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
         except Exception as err:
-            log.error(f"【{self.module_name}】记录历史失败：{str(err)}")
+            self.error(f"记录历史失败：{str(err)}")
 
     def get_state(self):
         return self._enabled

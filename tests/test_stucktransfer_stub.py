@@ -70,6 +70,10 @@ class _IPluginModule:
     def update_config(self, config, plugin_id=None): pass
     def get_config(self, plugin_id=None): return {}
     def get_data_path(self, plugin_id=None): return "."
+    def info(self, msg): print("[Plugin/INFO]", msg)
+    def warn(self, msg): print("[Plugin/WARN]", msg)
+    def error(self, msg): print("[Plugin/ERROR]", msg)
+    def debug(self, msg): pass
 
 
 base._IPluginModule = _IPluginModule
