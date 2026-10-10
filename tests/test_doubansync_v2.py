@@ -214,5 +214,36 @@ p._collect_action = None
 p._collect_action = "stop" if not p._collect_action else p._collect_action
 check("config: 默认stop", p._collect_action == "stop")
 
+# 13. Cookie 注入：init_config 将插件配置的 cookie 写入 DouBan 单例
+class _FakeDouban:
+    def __init__(self):
+        self.cookie = None
+
+class _FakeStubs:
+    def __getattr__(self, name):
+        return _FakeStubs()
+
+p = DS.__new__(DS)
+p.searcher = _FakeStubs()
+p.downloader = _FakeStubs()
+p.subscribe = _FakeSubscribe()
+p.get_state = lambda: False
+p.stop_service = lambda: None
+p.info = lambda *a, **k: None
+p.warn = lambda *a, **k: None
+p.error = lambda *a, **k: None
+_saved_init = mod.BackgroundScheduler
+_saved_douban = mod.DouBan
+mod.BackgroundScheduler = None  # 阻止真实调度器创建
+mod.DouBan = _FakeDouban        # 替换真实 DouBan（测试环境已 stub 为 object）
+try:
+    p.init_config({"enable": True, "onlyonce": False, "sync_type": "0",
+                   "interval": 6, "cookie": "bid=abc; dbcl2=\"12345:x\"", "users": "1", "types": "wish"})
+    check("cookie: 注入DouBan单例", p.douban.cookie == 'bid=abc; dbcl2="12345:x"',
+          repr(p.douban.cookie)[:60])
+finally:
+    mod.BackgroundScheduler = _saved_init
+    mod.DouBan = _saved_douban
+
 print(f"\n===== 结果：{len(PASS)} 通过 / {len(FAIL)} 失败 =====")
 sys.exit(1 if FAIL else 0)
