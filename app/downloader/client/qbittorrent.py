@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -6,6 +7,8 @@ from datetime import datetime
 
 import log
 import qbittorrentapi
+from bencode import bdecode, bencode
+from qbittorrentapi import Conflict409Error
 from app.downloader.client._base import _IDownloadClient
 from app.utils import ExceptionUtils, StringUtils
 from app.utils.types import DownloaderType
@@ -184,6 +187,12 @@ class Qbittorrent(_IDownloadClient):
         if not self.qbc:
             return [], True
         try:
+            # qbittorrentapi 的 status_filter 只接受字符串，传 list 会抛
+            # unhashable type: 'list'（它内部拿它做 set/dict 的键），
+            # 调用方 get_completed_torrents/get_downloading_torrents 传的正是 list，
+            # 于是永远返回空列表，转移任务和刷流都查不到种子。
+            if isinstance(status, (list, tuple, set)):
+                status = next(iter(status), None)
             torrents = self.qbc.torrents_info(torrent_hashes=ids,
                                               status_filter=status)
             if tag:
@@ -501,9 +510,51 @@ class Qbittorrent(_IDownloadClient):
                                             use_auto_torrent_management=is_auto,
                                             cookie=cookie)
             return self.__is_add_success(qbc_ret)
+        except Conflict409Error:
+            # 种子已存在（qB 返回 409 Conflict）。之前这里当成添加失败，
+            # 调用方（整季包分支）拿到 None 就 continue，于是那个「添加后暂停」
+            # 的任务永远不会走到选集 + 启动两步，永久停在暂停。
+            # 这里按「已在下载器中」处理：把已有的种子补上新 tag，
+            # 让 get_torrent_id_by_tag 能找回它的 hash，后续流程照常继续。
+            exists = self.__find_existing_torrent(content)
+            if not exists:
+                log.error(f"【{self.client_name}】{self.name} 种子已存在但未能定位：Conflict")
+                return False
+            if isinstance(tags, list) and tags:
+                try:
+                    self.qbc.torrents_add_tags(torrent_hashes=exists, tags=tags)
+                except Exception as err:
+                    log.warn(f"【{self.client_name}】{self.name} 为已存在种子补 tag 失败：{str(err)}")
+            log.info(f"【{self.client_name}】{self.name} 种子已存在，复用下载器中的任务：{exists}")
+            return True
         except Exception as err:
             log.error(f"【{self.client_name}】{self.name} 添加种子出错：{str(err)}")
             return False
+
+    def __find_existing_torrent(self, content):
+        """
+        在下载器中按种子内容算出的 infohash 查回已存在的任务 hash。
+        只做 infohash 精确匹配：查不到就返回 None，宁可当失败也不能按目录
+        瞎猜一个任务 —— 那会让调用方对错误的种子选集/启动。
+        :param content: 种子二进制内容
+        :return: 已存在种子的 hash，没有则 None
+        """
+        if not isinstance(content, (bytes, bytearray)):
+            return None
+        try:
+            torrent_dict = bdecode(bytes(content))
+        except Exception as err:
+            log.warn(f"【{self.client_name}】{self.name} 解析种子计算 infohash 失败：{str(err)}")
+            return None
+        if not torrent_dict or not torrent_dict.get('info'):
+            return None
+        info_hash = hashlib.sha1(bencode(torrent_dict['info'])).hexdigest()
+        try:
+            torrents = self.qbc.torrents_info(torrent_hashes=info_hash)
+        except Exception as err:
+            log.warn(f"【{self.client_name}】{self.name} 按 infohash 查已存在种子失败：{str(err)}")
+            return None
+        return torrents[0].get("hash") if torrents else None
 
     @staticmethod
     def __is_add_success(qbc_ret):
