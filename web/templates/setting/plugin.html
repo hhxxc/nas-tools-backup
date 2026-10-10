@@ -125,8 +125,9 @@
     ajax_post("get_plugin_apps", {}, function(ret){
       if (ret.result) {
         $("#plugin_apps_content").empty();
-        for (let pid in ret.result) {
-          let plugin = ret.result[pid];
+        // 已安装的插件排到最上层
+        let apps = Object.entries(ret.result).sort((a, b) => (b[1].installed ? 1 : 0) - (a[1].installed ? 1 : 0));
+        for (let [pid, plugin] of apps) {
           let count = ret.statistic[pid];
           let plugin_html = `
             <div class="card card-link-pop card-borderless p-0 shadow-sm rounded-3 overflow-hidden" href="javascript:void(0)">
@@ -138,6 +139,7 @@
                 >
                 </span>
                 ${count ? `<span class="badge bg-dark position-absolute" style="top: 10px; right: 10px;">${count.toLocaleString()}</span>` : ''}
+                ${plugin.installed ? `<span class="badge bg-green position-absolute" style="top: 10px; left: 10px;">已安装</span>` : ''}
               </div>
               <div class="card-body text-start">
                 <div class="card-title mb-1">${plugin.name}</div>
