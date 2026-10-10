@@ -21,18 +21,24 @@ from web.backend.web_utils import WebUtils
 
 lock = Lock()
 
+# 识别失败重试上限
+RETRY_MAX = 15
+# 重试退避基数（分钟）：2^n * RETRY_BASE_MIN，封顶24小时
+RETRY_BASE_MIN = 10
+RETRY_BACKOFF_MAX_MIN = 24 * 60
+
 
 class DoubanSync(_IPluginModule):
     # 插件名称
     module_name = "豆瓣同步"
     # 插件描述
-    module_desc = "同步豆瓣在看、想看、看过记录，自动添加订阅或搜索下载。"
+    module_desc = "同步豆瓣想看自动订阅，标记看过自动停止追更，识别失败自动重试。"
     # 插件图标
     module_icon = "douban.png"
     # 主题色
     module_color = "#05B711"
     # 插件版本
-    module_version = "1.2"
+    module_version = "2.0"
     # 插件作者
     module_author = "jxxghp"
     # 作者主页
@@ -62,6 +68,8 @@ class DoubanSync(_IPluginModule):
     _days = 0
     _types = []
     _cookie = None
+    # 看过条目处理方式：stop=停止订阅(推荐) / ignore=忽略 / download=下载(旧版行为)
+    _collect_action = "stop"
     _scheduler = None
 
     def init_config(self, config: dict = None):
@@ -105,6 +113,7 @@ class DoubanSync(_IPluginModule):
             if self._types:
                 if isinstance(self._types, str):
                     self._types = self._types.split(',')
+            self._collect_action = config.get("collect_action") or "stop"
 
         # 停止现有任务
         self.stop_service()
@@ -141,7 +150,8 @@ class DoubanSync(_IPluginModule):
                     "cookie": self._cookie,
                     "users": self._users,
                     "days": self._days,
-                    "types": self._types
+                    "types": self._types,
+                    "collect_action": self._collect_action
                 })
             if self._scheduler.get_jobs():
                 # 启动服务
@@ -197,12 +207,29 @@ class DoubanSync(_IPluginModule):
                         {
                             'title': '同步内容',
                             'required': "required",
-                            'tooltip': '同步哪些类型的收藏数据：do 在看，wish 想看，collect 看过，用英文逗号,分隔配置',
+                            'tooltip': '同步哪些类型的收藏数据：do 在看，wish 想看，collect 看过，用英文逗号,分隔配置。想看=自动订阅，看过=按下方「看过处理」联动',
                             'type': 'text',
                             'content': [
                                 {
                                     'id': 'types',
-                                    'placeholder': 'do,wish,collect',
+                                    'placeholder': 'wish,collect',
+                                }
+                            ]
+                        },
+                        {
+                            'title': '看过处理',
+                            'required': "required",
+                            'tooltip': '豆瓣标记「看过」后的动作：停止订阅（推荐，追完自动刹车，仅对之前由本插件创建的订阅生效）/ 忽略（看过记录不参与任何处理）/ 下载（旧版行为：把看过的也加入下载，用于补收藏）',
+                            'type': 'select',
+                            'content': [
+                                {
+                                    'id': 'collect_action',
+                                    'options': {
+                                        'stop': '停止订阅（推荐）',
+                                        'ignore': '忽略看过记录',
+                                        'download': '同步看过并下载（旧版行为）'
+                                    },
+                                    'default': 'stop',
                                 }
                             ]
                         },
@@ -228,7 +255,7 @@ class DoubanSync(_IPluginModule):
                         {
                             'title': '全量同步范围（天）',
                             'required': "required",
-                            'tooltip': '同步多少天内的记录，0表示同步全部，仅适用于全量同步',
+                            'tooltip': '同步多少天内的记录，0表示同步全部，仅适用于全量同步。首次使用建议设置为30，避免历史想看全量进订阅',
                             'type': 'text',
                             'content': [
                                 {
@@ -301,7 +328,9 @@ class DoubanSync(_IPluginModule):
         插件的额外页面，返回页面标题和页面内容
         :return: 标题，页面内容，确定按钮响应函数
         """
-        results = self.get_history()
+        results = self.get_history() or []
+        # 按添加时间倒序展示
+        results = sorted(results, key=lambda x: x.get("add_time") or "", reverse=True)
         template = """
           <div class="table-responsive table-modal-body">
             <table class="table table-vcenter card-table table-hover table-striped">
@@ -311,7 +340,7 @@ class DoubanSync(_IPluginModule):
                 <th>标题</th>
                 <th>类型</th>
                 <th>状态</th>
-                <th>添加时间</th>
+                <th>时间</th>
                 <th></th>
               </tr>
               </thead>
@@ -328,7 +357,7 @@ class DoubanSync(_IPluginModule):
                       <div>{{ Item.name }} ({{ Item.year }})</div>
                       {% if Item.rating %}
                         <div class="text-muted text-nowrap">
-                        评份：{{ Item.rating }}
+                        评分：{{ Item.rating }}
                         </div>
                       {% endif %}
                     </td>
@@ -340,6 +369,12 @@ class DoubanSync(_IPluginModule):
                         <span class="badge bg-green">已下载</span>
                       {% elif Item.state == 'RSS' %}
                         <span class="badge bg-blue">已订阅</span>
+                      {% elif Item.state == 'FINISHED' %}
+                        <span class="badge bg-gray">已看过·停止订阅</span>
+                      {% elif Item.state == 'RETRY' %}
+                        <span class="badge bg-orange">重试中{{ Item.retry_count or 0 }}次</span>
+                      {% elif Item.state == 'FAILED' %}
+                        <span class="badge bg-red">识别失败</span>
                       {% elif Item.state == 'NEW' %}
                         <span class="badge bg-blue">新增</span>
                       {% else %}
@@ -348,6 +383,9 @@ class DoubanSync(_IPluginModule):
                     </td>
                     <td>
                       <small>{{ Item.add_time or '' }}</small>
+                      {% if Item.state == 'RETRY' %}
+                        <small class="text-muted">下次：{{ Item.next_retry or '' }}</small>
+                      {% endif %}
                     </td>
                     <td>
                       <div class="dropdown">
@@ -450,6 +488,64 @@ class DoubanSync(_IPluginModule):
         """
         return self.delete_history(key=douban_id)
 
+    def __handle_collect(self, media, hist):
+        """
+        处理「看过」条目：按配置停止订阅/忽略/下载
+        :return: True 表示本条已处理完毕，无需再走订阅流程
+        """
+        if self._collect_action == "ignore":
+            return True
+        if self._collect_action == "download":
+            return False  # 保持旧版行为：走正常下载/订阅流程
+        # stop：看过 → 停止订阅（仅处理之前由本插件跟踪的条目）
+        state = (hist or {}).get("state")
+        if not hist:
+            # 看过但从未由本插件处理过：记录 FINISHED，防止以后重复进订阅
+            self.info(f"{media.get_name()} 标记看过（无历史记录），不处理")
+            return True
+        if state == "RSS":
+            # 取消订阅：优先用缓存的tmdbid，其次标题+年份
+            tmdbid = hist.get("tmdb_id")
+            rssid = self.subscribe.get_subscribe_id(mtype=media.type,
+                                                   title=media.get_name(),
+                                                   year=media.year,
+                                                   tmdbid=tmdbid)
+            if rssid:
+                self.subscribe.delete_subscribe(mtype=media.type,
+                                                title=media.get_name(),
+                                                year=media.year,
+                                                rssid=rssid)
+                self.info(f"{media.get_name()} 已标记看过，订阅已停止")
+            else:
+                self.warn(f"{media.get_name()} 标记看过，但未找到对应订阅（可能已删除）")
+            self.__update_history(media=media, state="FINISHED",
+                                  extra=hist.get("tmdb_id") and {"tmdb_id": hist.get("tmdb_id")})
+        elif state in ("NEW", "RETRY"):
+            # 还没订阅成功就看过：直接结束，不再订阅
+            self.info(f"{media.get_name()} 标记看过，取消处理")
+            self.__update_history(media=media, state="FINISHED")
+        elif state == "RETRY_MAXED":
+            pass
+        # DOWNLOADED / FINISHED / FAILED：不动
+        return True
+
+    def __handle_retry(self, media, hist):
+        """
+        处理重试条目的退避判断
+        :return: True=本轮跳过（未到退避时间）
+        """
+        retry_count = int(hist.get("retry_count") or 0)
+        backoff_min = min(RETRY_BASE_MIN * (2 ** min(retry_count, 12)), RETRY_BACKOFF_MAX_MIN)
+        last_time = hist.get("retry_time") or hist.get("add_time")
+        if last_time:
+            try:
+                last = datetime.strptime(last_time, "%Y-%m-%d %H:%M:%S")
+                if datetime.now() < last + timedelta(minutes=backoff_min):
+                    return True
+            except Exception:
+                pass
+        return False
+
     @EventHandler.register(EventType.DoubanSync)
     def sync(self, event=None):
         """
@@ -459,100 +555,130 @@ class DoubanSync(_IPluginModule):
             self.info("豆瓣配置：同步间隔未配置或配置不正确")
             return
         with lock:
-            # 拉取豆瓣数据
-            medias = self.__get_all_douban_movies()
-            # 开始搜索
+            # 拉取豆瓣数据（附带每个条目的标记类型）
+            medias, mark_types = self.__get_all_douban_movies()
+            # 开始处理
             for media in medias:
                 if not media or not media.get_name():
                     continue
                 try:
-                    # 查询数据库状态
-                    history = self.get_history(media.douban_id)
-                    if not history or history.get("state") == "NEW":
-                        if self._auto_search:
-                            # 需要搜索
-                            media_info = WebUtils.get_mediainfo_from_id(mtype=media.type,
-                                                                        mediaid=f"DB:{media.douban_id}",
-                                                                        wait=True)
-                            # 不需要自动加订阅，则直接搜索
-                            if not media_info or not media_info.tmdb_info:
-                                self.warn("%s 未查询到媒体信息" % media.get_name())
-                                continue
-                            # 检查是否存在，电视剧返回不存在的集清单
-                            exist_flag, no_exists, _ = self.downloader.check_exists_medias(meta_info=media_info)
-                            # 已经存在
-                            if exist_flag:
-                                # 更新为已下载状态
-                                self.info("%s 已存在" % media_info.title)
-                                self.__update_history(media=media_info, state="DOWNLOADED")
-                                continue
-                            if not self._auto_rss:
-                                # 开始搜索
-                                search_result, no_exists, search_count, download_count = self.searcher.search_one_media(
-                                    media_info=media_info,
-                                    in_from=SearchType.DB,
-                                    no_exists=no_exists,
-                                    user_name=media_info.user_name)
-                                if search_result:
-                                    # 下载全了更新为已下载，没下载全的下次同步再次搜索
-                                    self.__update_history(media=media_info, state="DOWNLOADED")
-                            else:
-                                # 需要加订阅，则由订阅去搜索
-                                self.info(
-                                    "%s %s 更新到%s订阅中..." % (media_info.title,
-                                                                 media_info.year,
-                                                                 media_info.type.value))
-                                code, msg, _ = self.subscribe.add_rss_subscribe(mtype=media_info.type,
-                                                                                name=media_info.title,
-                                                                                year=media_info.year,
-                                                                                channel=RssType.Auto,
-                                                                                mediaid=f"DB:{media_info.douban_id}",
-                                                                                in_from=SearchType.DB)
-                                if code != 0:
-                                    self.error("%s 添加订阅失败：%s" % (media_info.title, msg))
-                                    # 订阅已存在
-                                    if code == 9:
-                                        self.__update_history(media=media_info, state="RSS")
-                                else:
-                                    # 插入为已RSS状态
-                                    self.__update_history(media=media_info, state="RSS")
-                        else:
-                            # 不需要搜索
-                            if self._auto_rss:
-                                # 加入订阅，使状态为R
-                                self.info("%s %s 更新到%s订阅中..." % (
-                                    media.get_name(), media.year, media.type.value))
-                                code, msg, _ = self.subscribe.add_rss_subscribe(mtype=media.type,
-                                                                                name=media.get_name(),
-                                                                                year=media.year,
-                                                                                mediaid=f"DB:{media.douban_id}",
-                                                                                channel=RssType.Auto,
-                                                                                state="R",
-                                                                                in_from=SearchType.DB)
-                                if code != 0:
-                                    self.error("%s 添加订阅失败：%s" % (media.get_name(), msg))
-                                    # 订阅已存在
-                                    if code == 9:
-                                        self.__update_history(media=media, state="RSS")
-                                else:
-                                    # 插入为已RSS状态
-                                    self.__update_history(media=media, state="RSS")
-                            elif not history:
-                                self.info("%s %s 更新到%s列表中..." % (
-                                    media.get_name(), media.year, media.type.value))
-                                self.__update_history(media=media, state="NEW")
-
-                    else:
+                    hist = self.get_history(media.douban_id)
+                    dtype = mark_types.get(media.douban_id) or "wish"
+                    # 「看过」联动
+                    if dtype == "collect" and (hist or {}).get("state") != "DOWNLOADED":
+                        if self.__handle_collect(media, hist):
+                            continue
+                    # 重复处理跳过（NEW/RETRY/无历史 继续走）
+                    if hist and hist.get("state") == "RETRY":
+                        if self.__handle_retry(media, hist):
+                            continue
+                    elif hist and hist.get("state") not in ("NEW",):
                         self.info(f"{media.douban_id} {media.get_name()} {media.year} 已处理过")
+                        continue
+                    if self._auto_search:
+                        # 需要搜索
+                        media_info = WebUtils.get_mediainfo_from_id(mtype=media.type,
+                                                                    mediaid=f"DB:{media.douban_id}",
+                                                                    wait=True)
+                        # 不需要自动加订阅，则直接搜索
+                        if not media_info or not media_info.tmdb_info:
+                            self.warn("%s 未查询到媒体信息，进入重试队列" % media.get_name())
+                            self.__mark_retry(media, hist)
+                            continue
+                        # 检查是否存在，电视剧返回不存在的集清单
+                        exist_flag, no_exists, _ = self.downloader.check_exists_medias(meta_info=media_info)
+                        # 已经存在
+                        if exist_flag:
+                            self.info("%s 已存在" % media_info.title)
+                            self.__update_history(media=media_info, state="DOWNLOADED",
+                                                  extra={"tmdb_id": media_info.tmdb_info.id})
+                            continue
+                        if not self._auto_rss:
+                            # 开始搜索
+                            search_result, no_exists, search_count, download_count = self.searcher.search_one_media(
+                                media_info=media_info,
+                                in_from=SearchType.DB,
+                                no_exists=no_exists,
+                                user_name=media_info.user_name)
+                            if search_result:
+                                # 下载全了更新为已下载，没下载全的下次同步再次搜索
+                                self.__update_history(media=media_info, state="DOWNLOADED",
+                                                      extra={"tmdb_id": media_info.tmdb_info.id})
+                        else:
+                            # 需要加订阅，则由订阅去搜索
+                            self.info(
+                                "%s %s 更新到%s订阅中..." % (media_info.title,
+                                                             media_info.year,
+                                                             media_info.type.value))
+                            code, msg, _ = self.subscribe.add_rss_subscribe(mtype=media_info.type,
+                                                                            name=media_info.title,
+                                                                            year=media_info.year,
+                                                                            channel=RssType.Auto,
+                                                                            mediaid=f"DB:{media_info.douban_id}",
+                                                                            in_from=SearchType.DB)
+                            if code != 0:
+                                self.error("%s 添加订阅失败：%s" % (media_info.title, msg))
+                                # 订阅已存在
+                                if code == 9:
+                                    self.__update_history(media=media_info, state="RSS",
+                                                          extra={"tmdb_id": media_info.tmdb_info.id})
+                            else:
+                                # 插入为已RSS状态
+                                self.__update_history(media=media_info, state="RSS",
+                                                      extra={"tmdb_id": media_info.tmdb_info.id})
+                    else:
+                        # 不需要搜索
+                        if self._auto_rss:
+                            # 加入订阅，使状态为R
+                            self.info("%s %s 更新到%s订阅中..." % (
+                                media.get_name(), media.year, media.type.value))
+                            code, msg, _ = self.subscribe.add_rss_subscribe(mtype=media.type,
+                                                                            name=media.get_name(),
+                                                                            year=media.year,
+                                                                            mediaid=f"DB:{media.douban_id}",
+                                                                            channel=RssType.Auto,
+                                                                            state="R",
+                                                                            in_from=SearchType.DB)
+                            if code != 0:
+                                self.error("%s 添加订阅失败：%s" % (media.get_name(), msg))
+                                # 订阅已存在
+                                if code == 9:
+                                    self.__update_history(media=media, state="RSS")
+                            else:
+                                # 插入为已RSS状态
+                                self.__update_history(media=media, state="RSS")
+                        elif not hist:
+                            self.info("%s %s 更新到%s列表中..." % (
+                                media.get_name(), media.year, media.type.value))
+                            self.__update_history(media=media, state="NEW")
                 except Exception as err:
                     self.error(f"{media.douban_id} {media.get_name()} {media.year} 处理失败：{str(err)}")
                     ExceptionUtils.exception_traceback(err)
+                    self.__mark_retry(media, self.get_history(media.douban_id))
                     continue
             self.info("豆瓣数据同步完成")
 
-    def __update_history(self, media, state):
+    def __mark_retry(self, media, hist):
         """
-        插入历史记录
+        标记识别失败，进入重试队列（指数退避，超限标记失败）
+        """
+        retry_count = int((hist or {}).get("retry_count") or 0) + 1
+        if retry_count > RETRY_MAX:
+            self.warn(f"{media.get_name()} 重试{RETRY_MAX}次仍失败，放弃（可在豆瓣改名或手动处理后再同步）")
+            self.__update_history(media=media, state="FAILED",
+                                  extra={"retry_count": retry_count})
+            return
+        next_retry = (datetime.now() + timedelta(
+            minutes=min(RETRY_BASE_MIN * (2 ** min(retry_count, 12)), RETRY_BACKOFF_MAX_MIN))
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        self.__update_history(media=media, state="RETRY",
+                              extra={"retry_count": retry_count,
+                                     "retry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                     "next_retry": next_retry})
+
+    def __update_history(self, media, state, extra=None):
+        """
+        插入/更新历史记录
         """
         value = {
             "id": media.douban_id,
@@ -564,7 +690,13 @@ class DoubanSync(_IPluginModule):
             "state": state,
             "add_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
-        if self.get_history(key=media.douban_id):
+        if extra:
+            value.update(extra)
+        # 保留原添加时间
+        hist = self.get_history(key=media.douban_id)
+        if hist and hist.get("add_time"):
+            value["add_time"] = hist.get("add_time")
+        if hist:
             self.update_history(key=media.douban_id, value=value)
         else:
             self.history(key=media.douban_id, value=value)
@@ -572,14 +704,16 @@ class DoubanSync(_IPluginModule):
     def __get_all_douban_movies(self):
         """
         获取每一个用户的每一个类型的豆瓣标记
-        :return: 搜索到的媒体信息列表（不含TMDB信息）
+        :return: (媒体信息列表（不含TMDB信息）, {douban_id: 标记类型 wish/do/collect})
         """
-        self.info(f"同步方式：{'近期动态' if str({self._sync_type}) == '1' else '全量同步'}")
+        self.info(f"同步方式：{'近期动态' if str(self._sync_type) == '1' else '全量同步'}")
 
         # 返回媒体列表
         media_list = []
-        # 豆瓣ID列表
+        # 豆瓣ID列表 {douban_id: {"user_name": xx, "dtype": wish/do/collect}}
         douban_ids = {}
+        # 标记类型优先级：collect > do > wish（一条条目可能先想看后看过）
+        dtype_priority = {"wish": 0, "do": 1, "collect": 2}
         # 每一个用户
         for user in self._users:
             if not user:
@@ -631,11 +765,15 @@ class DoubanSync(_IPluginModule):
                                         break
                                 doubanid = item.get("id")
                                 if str(doubanid).isdigit():
-                                    self.info("解析到媒体：%s" % doubanid)
+                                    self.debug("解析到媒体：%s (%s)" % (doubanid, mtype))
                                     if doubanid not in douban_ids:
                                         douban_ids[doubanid] = {
-                                            "user_name": user_name
+                                            "user_name": user_name,
+                                            "dtype": mtype
                                         }
+                                    elif dtype_priority.get(mtype, 0) > dtype_priority.get(
+                                            douban_ids[doubanid].get("dtype"), 0):
+                                        douban_ids[doubanid]["dtype"] = mtype
                                     sucess_urlnum += 1
                                     user_type_succnum += 1
                                     user_succnum += 1
@@ -674,11 +812,15 @@ class DoubanSync(_IPluginModule):
                                 continue
                         doubanid = item.get("id")
                         if str(doubanid).isdigit():
-                            self.info("解析到媒体：%s" % doubanid)
+                            self.debug("解析到媒体：%s (%s)" % (doubanid, mtype))
                             if doubanid not in douban_ids:
                                 douban_ids[doubanid] = {
-                                    "user_name": user_name
+                                    "user_name": user_name,
+                                    "dtype": mtype
                                 }
+                            elif dtype_priority.get(mtype, 0) > dtype_priority.get(
+                                    douban_ids[doubanid].get("dtype"), 0):
+                                douban_ids[doubanid]["dtype"] = mtype
                             user_type_succnum += 1
                             user_succnum += 1
                     self.debug(f"用户 {user_name or user} 的 {mtype} 解析完成，共获取到 {user_type_succnum} 个媒体")
@@ -698,7 +840,7 @@ class DoubanSync(_IPluginModule):
                     sleep(round(random.uniform(1, 5), 1))
                     continue
             media_type = MediaType.TV if douban_info.get("episodes_count") else MediaType.MOVIE
-            self.info("%s：%s %s".strip() % (media_type.value, douban_info.get("title"), douban_info.get("year")))
+            self.info("%s：%s %s" % (media_type.value, douban_info.get("title"), douban_info.get("year")))
             meta_info = MetaInfo(title="%s %s" % (douban_info.get("title"), douban_info.get("year") or ""))
             meta_info.douban_id = doubanid
             meta_info.type = media_type
@@ -712,19 +854,4 @@ class DoubanSync(_IPluginModule):
                 media_list.append(meta_info)
             # 随机休眠
             sleep(round(random.uniform(1, 5), 1))
-        return media_list
-
-    def stop_service(self):
-        """
-        退出插件
-        """
-        try:
-            if self._scheduler:
-                self._scheduler.remove_all_jobs()
-                if self._scheduler.running:
-                    self._event.set()
-                    self._scheduler.shutdown()
-                    self._event.clear()
-                self._scheduler = None
-        except Exception as e:
-            print(str(e))
+        return media_list, {k: v.get("dtype") for k, v in douban_ids.items()}
