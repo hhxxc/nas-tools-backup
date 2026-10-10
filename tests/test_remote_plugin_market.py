@@ -17,19 +17,33 @@ import types as _types
 
 for _name in ["log", "config",
               "app", "app.conf", "app.utils", "app.utils.commons",
-              "app.utils.http_utils", "app.utils.types"]:
+              "app.utils.http_utils", "app.utils.types",
+              "app.plugins", "app.plugins.mp_compat"]:
     if _name not in sys.modules:
         _m = _types.ModuleType(_name)
         sys.modules[_name] = _m
+# 标记为包，支持子模块 import
+for _name in ["app", "app.plugins"]:
+    sys.modules[_name].__path__ = []
 sys.modules["log"].warn = lambda *a, **k: None
 sys.modules["log"].info = lambda *a, **k: None
 sys.modules["log"].error = lambda *a, **k: None
+sys.modules["log"].debug = lambda *a, **k: None
 sys.modules["config"].Config = lambda *a, **k: None
 sys.modules["app.conf"].SystemConfig = lambda *a, **k: None
 sys.modules["app.utils"].PathUtils = None
 sys.modules["app.utils.commons"].singleton = lambda cls: cls
 sys.modules["app.utils.http_utils"].RequestUtils = None
 sys.modules["app.utils.types"].SystemConfigKey = None
+
+# mp_compat 也隔离加载（其 _build 延迟导入真实基类，测试不触发）
+_mp_spec = importlib.util.spec_from_file_location(
+    "app.plugins.mp_compat",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "app", "plugins", "mp_compat.py"))
+_mp_mod = importlib.util.module_from_spec(_mp_spec)
+sys.modules["app.plugins.mp_compat"] = _mp_mod
+_mp_spec.loader.exec_module(_mp_mod)
 
 _spec = importlib.util.spec_from_file_location(
     "remote_plugin_helper",
@@ -105,6 +119,28 @@ check("manifest: 列表格式+脏数据跳过", len(plugins2) == 1, f"got {len(p
 check("manifest: 非法JSON返回空", RemotePluginHelper._RemotePluginHelper__parse_manifest(
     helper, "{bad json", {"name": "s", "repo": "a/b", "branch": "main"}) == [])
 
+# ---------- 离线：MP 兼容度扫描 ----------
+from app.plugins.mp_compat import analyze_plugin_compat
+
+r = analyze_plugin_compat("import os\nimport re\n")
+check("compat: 纯标准库=nastool", r["level"] == "nastool", str(r))
+r = analyze_plugin_compat(
+    "from app.utils.http_utils import RequestUtils\nfrom app.conf import SystemConfig\n")
+check("compat: NT已有模块=nastool", r["level"] == "nastool", str(r))
+r = analyze_plugin_compat(
+    "from app.log import logger\nfrom app.utils.http import RequestUtils\n"
+    "from app.plugins import _PluginBase\n")
+check("compat: 可shim=mp_shim", r["level"] == "mp_shim", str(r))
+r = analyze_plugin_compat(
+    "from app.core.config import settings\nfrom app.db.site_oper import SiteOper\n")
+check("compat: MP专有=mp_deep", r["level"] == "mp_deep", str(r))
+check("compat: mp_deep列出缺失", "app.db.site_oper" in r["missing"], str(r["missing"]))
+r = analyze_plugin_compat(
+    "from app.plugins import _PluginBase\nfrom app.db.something import X\n")
+check("compat: shim+deep混合=mp_deep", r["level"] == "mp_deep", str(r))
+r = analyze_plugin_compat("def broken(:\n")
+check("compat: 语法错误=unknown", r["level"] == "unknown", str(r))
+
 # ---------- 在线：真实拉取市场清单 + 下载插件文件 ----------
 if "--offline-only" not in sys.argv:
     import urllib.request
@@ -173,6 +209,12 @@ if "--offline-only" not in sys.argv:
                     used_file = fn
                     break
             check(f"在线: 下载插件主文件 {p['id']}", ok_dl, f"路径 {used_file}")
+            if ok_dl:
+                # 真实 MP 插件应被判定为不兼容（门禁可拦截）
+                from app.plugins.mp_compat import analyze_plugin_compat as _apc
+                res = _apc(c)
+                lv = res["level"]
+                check(f"在线: 兼容扫描 {p['id']} 判定={lv}", lv in ("mp_deep", "mp_shim"), str(res["missing"][:4]))
     else:
         check("在线: 拉取官方市场清单", False, "直连与代理均失败")
 
