@@ -17,8 +17,8 @@ from config import Config
 
 # 默认市场源，格式：名称|user/repo|branch
 DEFAULT_SOURCES = ["MoviePilot官方|jxxghp/MoviePilot-Plugins|main"]
-# GitHub 加速代理前缀，直连失败时回落使用
-GITHUB_PROXY_PREFIX = "https://ghproxy.net/"
+# GitHub 加速代理前缀列表，直连失败时依次回落（部分代理不稳定，多个互为备份）
+GITHUB_PROXY_PREFIXES = ["https://ghproxy.net/", "https://gh-proxy.com/"]
 # 清单缓存时间（秒）
 _CACHE_TTL = 300
 
@@ -47,10 +47,10 @@ class RemotePluginHelper:
 
     def __get_proxy(self):
         """
-        获取加速代理前缀（优先插件配置），默认使用 ghproxy
+        获取加速代理前缀（优先插件配置），默认第一个可用代理
         """
         conf = self.systemconfig.get(SystemConfigKey.UserRemotePlugins) or {}
-        return conf.get("gh_proxy") or GITHUB_PROXY_PREFIX
+        return conf.get("gh_proxy") or GITHUB_PROXY_PREFIXES[0]
 
     def get_market_sources(self):
         """
@@ -88,18 +88,33 @@ class RemotePluginHelper:
         self.systemconfig.set(SystemConfigKey.UserRemoteMarketSources, sources)
         self._cache.clear()
 
-    def __fetch_text(self, url):
+    def __fetch_text(self, url, validate_json=False):
         """
-        拉取文本内容，直连失败回落加速代理，重试2次
+        拉取文本内容：先直连，再依次回落加速代理，共最多 1+N 次尝试
+        :param validate_json: 校验响应为合法 JSON（拉清单用），
+                              防止代理返回截断/错误页被当成功导致市场空列表
         """
-        proxy = self.__get_proxy()
-        for i in range(2):
-            # 第一次直连，第二次走代理
-            req_url = url if i == 0 else f"{proxy}{url}"
-            res = RequestUtils(accept_type="application/json",
-                               timeout=15).get(req_url)
-            if res:
-                return res
+        # 用户自定义代理优先，否则用内置代理列表
+        conf = self.systemconfig.get(SystemConfigKey.UserRemotePlugins) or {}
+        custom = conf.get("gh_proxy")
+        proxies = [custom] if custom else GITHUB_PROXY_PREFIXES
+        for req_url in [url] + [f"{p}{url}" for p in proxies]:
+            try:
+                res = RequestUtils(accept_type="application/json",
+                                   timeout=15).get(req_url)
+            except Exception as err:
+                log.warn(f"【RemotePlugin】请求异常 {req_url[:80]}：{str(err)}")
+                continue
+            if not res:
+                log.warn(f"【RemotePlugin】请求无响应：{req_url[:80]}")
+                continue
+            if validate_json:
+                try:
+                    json.loads(res)
+                except Exception as err:
+                    log.warn(f"【RemotePlugin】响应非合法JSON（疑似代理截断）：{req_url[:80]} - {str(err)}")
+                    continue
+            return res
         return None
 
     def __parse_manifest(self, manifest_text, source):
@@ -116,7 +131,9 @@ class RemotePluginHelper:
         plugins = []
         items = []
         if isinstance(data, dict):
-            items = data.values()
+            # 字典格式：键即插件ID（MoviePilot package.json 条目内不含 id 字段）
+            items = [dict(v, id=k) if isinstance(v, dict) else None
+                     for k, v in data.items()]
         elif isinstance(data, list):
             items = data
         for item in items:
@@ -155,7 +172,7 @@ class RemotePluginHelper:
             repo = str(source.get("repo")).strip("/")
             branch = source.get("branch") or "main"
             raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/package.json"
-            text = self.__fetch_text(raw_url)
+            text = self.__fetch_text(raw_url, validate_json=True)
             if not text:
                 log.warn(f"【RemotePlugin】获取清单失败：{source.get('name')} ({repo})")
                 continue
@@ -218,25 +235,52 @@ class RemotePluginHelper:
             return False
         return plugin_id.replace("_", "").replace("-", "").isalnum()
 
+    @staticmethod
+    def __candidate_files(plugin):
+        """
+        插件文件候选路径（按顺序尝试）：
+        清单 file 字段 → plugins/<id小写>/__init__.py → plugins.v2/.v3 包路径 → <id>.py
+        （兼容 MoviePilot 目录包结构：清单通常不含 file 字段）
+        """
+        pid = str(plugin.get("id"))
+        lower = pid.lower()
+        cands = []
+        if plugin.get("file"):
+            cands.append(str(plugin["file"]))
+        cands += [
+            f"plugins/{lower}/__init__.py",
+            f"plugins.v2/{lower}/__init__.py",
+            f"plugins.v3/{lower}/__init__.py",
+            f"{pid}.py",
+        ]
+        # 去重保序
+        seen, result = set(), []
+        for c in cands:
+            if c not in seen:
+                seen.add(c)
+                result.append(c)
+        return result
+
     def __download_plugin_file(self, plugin):
         """
-        下载插件py文件到远程插件目录
+        下载插件主文件到远程插件目录（多候选路径依次尝试）
         """
         repo = str(plugin.get("source_repo")).strip("/")
         branch = plugin.get("source_branch") or "main"
-        file_name = plugin.get("file") or f"{plugin.get('id')}.py"
-        raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{file_name}"
-        content = self.__fetch_text(raw_url)
-        if not content:
-            return False
         file_path = os.path.join(self.remote_plugin_path, f"{plugin.get('id')}.py")
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            return True
-        except Exception as err:
-            log.error(f"【RemotePlugin】写入插件文件失败 {plugin.get('id')}：{str(err)}")
-            return False
+        for file_name in self.__candidate_files(plugin):
+            raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{file_name}"
+            content = self.__fetch_text(raw_url)
+            if not content:
+                continue
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                return True
+            except Exception as err:
+                log.error(f"【RemotePlugin】写入插件文件失败 {plugin.get('id')}：{str(err)}")
+                return False
+        return False
 
     def __install_requirements(self, requirements):
         """
