@@ -9,10 +9,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 import log
 from app.downloader import Downloader
-from app.helper import DbHelper
+from app.helper import DbHelper, ThreadHelper
 from app.plugins.modules._base import _IPluginModule
 from app.subscribe import Subscribe
-from app.utils import ThreadHelper
 from config import Config, PT_TAG
 
 
