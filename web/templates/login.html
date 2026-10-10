@@ -97,16 +97,12 @@
 <script>
   (function() {
     var form = document.querySelector('form');
-    var submitBtn = form.querySelector('button[type="submit"]');
-    function submitOnEnter(e) {
-      if (e.key === 'Enter' || e.keyCode === 13) {
+    form.addEventListener('keydown', function(e) {
+      // 回车提交；跳过输入法组字阶段的 Enter（中文输入确认候选词）
+      if (e.key === 'Enter' && e.target.tagName === 'INPUT' && !e.isComposing) {
         e.preventDefault();
-        submitBtn.click();
+        form.submit();
       }
-    }
-    form.querySelectorAll('input').forEach(function(input) {
-      input.addEventListener('keydown', submitOnEnter);
-      input.addEventListener('keypress', submitOnEnter);
     });
   })();
 </script>
