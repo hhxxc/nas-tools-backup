@@ -395,9 +395,9 @@
                 {{ SVG.log_select() }}
               </button>
               <div class="dropdown-menu dropdown-menu-end" id="dropdown-menu-logger">
-              {% with Loggers = ['All', 'System', 'Rss', 'RssChecker', 'Rmt', 'Meta', 'Sync', 'Sites', 'Brush', 'Douban', 'Spider', 'Message', 'Indexer', 'Searcher', 'Subscribe', 'Downloader', 'TorrentRemover', 'Plugin'] %}
-                {% for Logger in Loggers %}
-                <a class="dropdown-item" href="javascript:void(0)" onclick="logger_select('{{ Logger }}')">{{ Logger }}</a>
+              {% with Loggers = [('All', '全部'), ('System', '系统'), ('Rss', '订阅RSS'), ('RssChecker', '自定义RSS'), ('Rmt', '文件整理'), ('Meta', '识别'), ('Sync', '目录同步'), ('Sites', '站点'), ('Brush', '刷流'), ('Douban', '豆瓣'), ('Spider', '爬虫'), ('Message', '消息通知'), ('Indexer', '索引'), ('Searcher', '搜索'), ('Subscribe', '订阅'), ('Downloader', '下载'), ('TorrentRemover', '自动删种'), ('Plugin', '插件')] %}
+                {% for Logger, LoggerName in Loggers %}
+                <a class="dropdown-item" href="javascript:void(0)" onclick="logger_select('{{ Logger }}')">{{ LoggerName }}</a>
                 {% endfor %}
               {% endwith %}
               </div>
