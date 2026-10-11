@@ -782,6 +782,12 @@ class Subscribe:
                 self.dbhelper.update_rss_movie_state(rssid=rssid, state='R')
                 log.error(f"【Subscribe】电影 {name} 订阅搜索失败：{str(err)}")
                 continue
+            finally:
+                # 兜底：搜索结束后若仍卡在 S(搜索中)则复位 R，防止进程中断导致订阅永久卡死
+                try:
+                    self.dbhelper.update_rss_movie_state(rssid=rssid, state='R')
+                except Exception:
+                    pass
 
     def subscribe_search_tv(self, rssid=None, state="D"):
         """
@@ -921,6 +927,14 @@ class Subscribe:
                 log.error(f"【Subscribe】电视剧 {name} 订阅搜索失败：{str(err)}")
                 self.dbhelper.update_rss_tv_state(rssid=rssid, state='R')
                 continue
+            finally:
+                # 兜底：无论何种路径结束(含 continue/未捕获异常)，若订阅仍卡在 S(搜索中)则复位 R，
+                # 防止搜索中途异常/进程重启导致订阅永久停留在 S 状态不再被 RSS 引擎处理。
+                # 订阅已完成转历史时该行已删除，此更新不生效，无副作用。
+                try:
+                    self.dbhelper.update_rss_tv_state(rssid=rssid, state='R')
+                except Exception:
+                    pass
 
     def update_rss_state(self, rtype, rssid, state):
         """
