@@ -295,6 +295,141 @@ def web():
                            Commands=Commands)
 
 
+# ---------------- 看后清理（标记看完 → 队列 → 做种满 72h 自动删除） ----------------
+_MD_MODULE = None
+
+
+def _md_mod():
+    global _MD_MODULE
+    if _MD_MODULE is None:
+        import sys
+        os.environ.setdefault("MD_BASE", "/markdel")
+        os.environ.setdefault("MD_JF", "http://192.168.31.198:18090")
+        os.environ.setdefault("MD_QB", "http://192.168.31.198:8085")
+        if "/markdel" not in sys.path:
+            sys.path.insert(0, "/markdel")
+        import markdel_core
+        _MD_MODULE = markdel_core
+    return _MD_MODULE
+
+
+def _md_json(obj, code=200):
+    return Response(json.dumps(obj, ensure_ascii=False), status=code, mimetype="application/json")
+
+
+@App.route('/cleanup', methods=['GET'])
+@login_required
+def cleanup():
+    return render_template("cleanup.html")
+
+
+@App.route('/cleanup/api/summary', methods=['GET'])
+@login_required
+def cleanup_summary():
+    try:
+        return _md_json({"code": 0, "data": _md_mod().summary()})
+    except Exception as e:
+        return _md_json({"code": 1, "msg": str(e)})
+
+
+@App.route('/cleanup/api/list', methods=['GET'])
+@login_required
+def cleanup_list():
+    try:
+        m = _md_mod()
+        typ = request.args.get("type", "movie")
+        items = m.list_movies() if typ == "movie" else m.list_series()
+        queued = set()
+        for x in m.queue_list():
+            queued.add(str(x.get("jf_id")))
+            if x.get("series_id"):
+                queued.add(str(x.get("series_id")))
+        for it in items:
+            it["queued"] = str(it.get("jf_id")) in queued
+        return _md_json({"code": 0, "items": items})
+    except Exception as e:
+        return _md_json({"code": 1, "msg": str(e)})
+
+
+@App.route('/cleanup/api/seasons', methods=['GET'])
+@login_required
+def cleanup_seasons():
+    try:
+        sid = request.args.get("series_id", "")
+        return _md_json({"code": 0, "seasons": _md_mod().series_seasons(sid)})
+    except Exception as e:
+        return _md_json({"code": 1, "msg": str(e)})
+
+
+@App.route('/cleanup/api/mark', methods=['POST'])
+@login_required
+def cleanup_mark():
+    try:
+        d = request.get_json(silent=True) or {}
+        iid = _md_mod().add_mark(
+            kind=d.get("kind") or "movie",
+            jf_id=d.get("jf_id"),
+            season_id=d.get("season_id"),
+            season_label=d.get("season_label"),
+            series_id=d.get("series_id"),
+            series_title=d.get("series_title"),
+            title=d.get("title"),
+            source="manual")
+        return _md_json({"code": 0, "id": iid})
+    except Exception as e:
+        return _md_json({"code": 1, "msg": str(e)})
+
+
+@App.route('/cleanup/api/queue', methods=['GET'])
+@login_required
+def cleanup_queue():
+    try:
+        return _md_json({"code": 0, "items": _md_mod().queue_list()})
+    except Exception as e:
+        return _md_json({"code": 1, "msg": str(e)})
+
+
+@App.route('/cleanup/api/cancel', methods=['POST'])
+@login_required
+def cleanup_cancel():
+    try:
+        d = request.get_json(silent=True) or {}
+        state, msg = _md_mod().cancel(int(d.get("id")))
+        return _md_json({"code": 0 if state else 1, "msg": msg})
+    except Exception as e:
+        return _md_json({"code": 1, "msg": str(e)})
+
+
+@App.route('/cleanup/api/run', methods=['POST'])
+@login_required
+def cleanup_run():
+    try:
+        from threading import Thread
+        Thread(target=_md_mod().run_queue, kwargs={"manual": True}, daemon=True).start()
+        return _md_json({"code": 0, "msg": "已触发"})
+    except Exception as e:
+        return _md_json({"code": 1, "msg": str(e)})
+
+
+@App.route('/cleanup/img/<item_id>', methods=['GET'])
+@login_required
+def cleanup_img(item_id):
+    if not re.match(r'^[A-Za-z0-9]+$', item_id or ""):
+        return Response("", status=400)
+    try:
+        from urllib import request as urlrequest
+        m = _md_mod()
+        url = "%s/Items/%s/Images/Primary?maxHeight=320&quality=85" % (m.JF_BASE, item_id)
+        req = urlrequest.Request(url)
+        req.add_header("Authorization", 'MediaBrowser Token="%s"' % m.JF_TOKEN)
+        with urlrequest.urlopen(req, timeout=15) as r:
+            data = r.read()
+            ctype = r.headers.get("Content-Type") or "image/jpeg"
+        return Response(data, mimetype=ctype)
+    except Exception:
+        return Response("", status=404)
+
+
 # 开始
 @App.route('/index', methods=['POST', 'GET'])
 @login_required

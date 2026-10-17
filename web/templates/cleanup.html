@@ -1,0 +1,254 @@
+{% import 'macro/svg.html' as SVG %}
+<style>
+  .md-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(134px, 1fr)); gap: 14px; }
+  .md-card { position: relative; background: #fff; border: 1px solid #e6e8eb; border-radius: 10px; overflow: hidden; transition: .18s; }
+  .md-card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(32, 107, 196, .16); }
+  .md-poster { width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block; background: #f1f3f5; }
+  .md-body { padding: 8px 9px 10px; }
+  .md-title { font-size: 12.5px; font-weight: 600; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 36px; }
+  .md-meta { font-size: 11px; color: #8a94a6; margin: 3px 0 7px; }
+  .md-btn { width: 100%; border: 0; background: #f1f3f5; color: #1b2733; font-size: 12px; font-weight: 600; padding: 6px 0; border-radius: 7px; cursor: pointer; transition: .15s; }
+  .md-btn:hover { background: #e02424; color: #fff; }
+  .md-card.is-queued .md-poster { filter: grayscale(1) brightness(.72); }
+  .md-mask { position: absolute; left: 0; top: 0; right: 0; aspect-ratio: 2/3; display: flex; align-items: center; justify-content: center; background: rgba(20, 33, 51, .58); color: #fff; font-size: 12px; font-weight: 600; text-align: center; padding: 6px; }
+  .md-tag { position: absolute; top: 8px; left: 8px; font-size: 10.5px; padding: 2px 7px; border-radius: 20px; color: #fff; }
+  .md-tag.movie { background: #2fb344; }
+  .md-tag.series { background: #206bc4; }
+  .md-tag.season { background: #8763c6; }
+  .md-opt { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #f0f1f3; cursor: pointer; }
+  .md-opt:hover { background: #f8f9fb; }
+  .md-opt:last-child { border-bottom: 0; }
+  .md-stats { font-size: 13px; }
+  .md-stats .n { font-size: 18px; font-weight: 700; }
+  .md-toast { position: fixed; left: 50%; bottom: 90px; transform: translate(-50%, 12px); background: #1b2733; color: #fff; padding: 10px 18px; border-radius: 9px; font-size: 13px; opacity: 0; pointer-events: none; transition: .25s; z-index: 2000; }
+  .md-toast.on { opacity: 1; transform: translate(-50%, 0); }
+  .md-empty { text-align: center; color: #8a94a6; padding: 60px 10px; font-size: 13px; }
+  .md-row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border: 1px solid #e6e8eb; border-radius: 10px; margin-bottom: 8px; background: #fff; }
+  .md-pill { font-size: 11px; padding: 2px 9px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+  .md-pill.wait { background: #fff5e0; color: #b57a00; }
+  .md-pill.ready { background: #e5f6fd; color: #0b7285; }
+  .md-pill.done { background: #e6f8ea; color: #1a7f37; }
+  .md-pill.fail { background: #ffe9e9; color: #c92a2a; }
+</style>
+
+<div class="container-xl">
+  <div class="page-header d-print-none mb-2">
+    <div class="row align-items-center">
+      <div class="col">
+        <h2 class="page-title">看后清理</h2>
+        <div class="text-muted mt-1" style="font-size:12.5px">
+          标记「看完了」= 进删除队列；做种满 72 小时后自动删掉 qB 种子、源文件与硬链接
+        </div>
+      </div>
+      <div class="col-auto ms-auto">
+        <button class="btn btn-danger" onclick="md_run()">立即执行队列</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body py-2">
+      <div class="row g-0 text-center md-stats">
+        <div class="col"><div class="n text-danger" id="md-s-pending">-</div><div class="text-muted">队列待删</div></div>
+        <div class="col"><div class="n text-green" id="md-s-released">-</div><div class="text-muted">累计释放</div></div>
+        <div class="col"><div class="n" id="md-s-today">-</div><div class="text-muted">今日释放</div></div>
+        <div class="col"><div class="n" id="md-s-free">-</div><div class="text-muted">媒体盘剩余</div></div>
+      </div>
+    </div>
+  </div>
+
+  <ul class="nav nav-tabs mb-3" id="md-tabs">
+    <li class="nav-item"><a href="javascript:md_tab('movie')" class="nav-link active" data-tab="movie">电影</a></li>
+    <li class="nav-item"><a href="javascript:md_tab('series')" class="nav-link" data-tab="series">剧集</a></li>
+    <li class="nav-item"><a href="javascript:md_tab('queue')" class="nav-link" data-tab="queue">删除队列</a></li>
+  </ul>
+
+  <div id="md-view"><div class="md-empty">加载中…</div></div>
+</div>
+
+<div class="modal modal-blur fade" id="md-season-modal" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog modal-md modal-dialog-centered" role="dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="md-season-title">选择范围</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body p-0" id="md-season-body"></div>
+    </div>
+  </div>
+</div>
+
+<div class="md-toast" id="md-toast"></div>
+
+<script>
+(function () {
+  var state = { tab: 'movie', movies: null, series: null };
+
+  function fmt(n) {
+    if (n === null || n === undefined || n < 0) return '-';
+    if (n === 0) return '0 B';
+    var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0, v = n;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' ' + u[i];
+  }
+  function esc(s) {
+    return String(s || '').replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+  function toast(m) {
+    var t = document.getElementById('md-toast');
+    t.textContent = m; t.classList.add('on');
+    clearTimeout(t._h); t._h = setTimeout(function () { t.classList.remove('on'); }, 2600);
+  }
+
+  window.md_summary = function () {
+    $.get('/cleanup/api/summary', function (r) {
+      if (r.code !== 0) return;
+      var d = r.data;
+      $('#md-s-pending').text(d.pending);
+      $('#md-s-released').text(fmt(d.released));
+      $('#md-s-today').text(fmt(d.today_released));
+      $('#md-s-free').text(fmt(d.free));
+    });
+  };
+
+  window.md_tab = function (t) {
+    state.tab = t;
+    $('#md-tabs .nav-link').removeClass('active');
+    $('#md-tabs .nav-link[data-tab="' + t + '"]').addClass('active');
+    if (t === 'queue') md_queue(); else md_load(t);
+  };
+
+  function card(it, type) {
+    var q = it.queued ? ' is-queued' : '';
+    var meta = type === 'movie'
+      ? [it.year, fmt(it.size)].filter(Boolean).join(' · ')
+      : [it.year, it.count ? it.count + ' 集' : ''].filter(Boolean).join(' · ');
+    var action = type === 'movie'
+      ? 'md_markMovie(\'' + it.jf_id + '\',\'' + esc(it.title).replace(/'/g, "\\'") + '\')'
+      : 'md_openSeries(\'' + it.jf_id + '\',\'' + esc(it.title).replace(/'/g, "\\'") + '\')';
+    return '<div class="md-card' + q + '">'
+      + '<img class="md-poster" loading="lazy" src="/cleanup/img/' + it.jf_id + '">'
+      + '<span class="md-tag ' + type + '">' + (type === 'movie' ? '电影' : '剧集') + '</span>'
+      + (it.queued ? '<div class="md-mask">已加入删除队列</div>' : '')
+      + '<div class="md-body">'
+      + '<div class="md-title">' + esc(it.title) + '</div>'
+      + '<div class="md-meta">' + esc(meta) + '</div>'
+      + '<button class="md-btn" onclick="' + action + '">' + (it.queued ? '已标记' : '看完了') + '</button>'
+      + '</div></div>';
+  }
+
+  function md_load(type) {
+    var box = document.getElementById('md-view');
+    box.innerHTML = '<div class="md-empty">加载中…</div>';
+    $.get('/cleanup/api/list?type=' + type, function (r) {
+      if (r.code !== 0) { box.innerHTML = '<div class="md-empty">' + esc(r.msg) + '</div>'; return; }
+      state[type === 'movie' ? 'movies' : 'series'] = r.items;
+      if (!r.items.length) { box.innerHTML = '<div class="md-empty">没有条目</div>'; return; }
+      box.innerHTML = '<div class="md-grid">' + r.items.map(function (it) { return card(it, type); }).join('') + '</div>';
+    }).fail(function () { box.innerHTML = '<div class="md-empty">请求失败</div>'; });
+  }
+  window.md_load = md_load;
+
+  window.md_markMovie = function (id, title) {
+    if (!confirm('标记《' + title + '》为已看？\n\n会进入删除队列，做种满 72 小时后自动删除种子、源文件与硬链接。')) return;
+    $.ajax({
+      url: '/cleanup/api/mark', type: 'POST', contentType: 'application/json',
+      data: JSON.stringify({ kind: 'movie', jf_id: id, title: title }),
+      success: function (r) {
+        if (r.code === 0) { toast('已加入删除队列'); md_load('movie'); md_summary(); }
+        else { alert(r.msg); }
+      },
+      error: function () { alert('请求失败'); }
+    });
+  };
+
+  window.md_openSeries = function (id, title) {
+    $('#md-season-title').text(title);
+    $('#md-season-body').html('<div class="md-empty">读取季信息…</div>');
+    $('#md-season-modal').modal('show');
+    $.get('/cleanup/api/seasons?series_id=' + id, function (r) {
+      if (r.code !== 0) { $('#md-season-body').html('<div class="md-empty">' + esc(r.msg) + '</div>'); return; }
+      var total = r.seasons.reduce(function (a, s) { return a + s.episodes.length; }, 0);
+      var h = '';
+      if (r.seasons.length > 1) {
+        h += '<div class="md-opt" onclick="md_markSeason(\'' + id + '\',\'series\',null,\'整剧\',\'' + esc(title).replace(/'/g, "\\'") + '\')">'
+          + '<span><b>整部剧</b><span class="text-muted"> · ' + total + ' 集 / ' + r.seasons.length + ' 季</span></span>'
+          + '<span class="text-danger">标记删除</span></div>';
+      }
+      r.seasons.forEach(function (s) {
+        h += '<div class="md-opt" onclick="md_markSeason(\'' + id + '\',\'season\',\'' + s.season_id + '\',\'' + esc(s.name) + '\',\'' + esc(title).replace(/'/g, "\\'") + '\')">'
+          + '<span>' + esc(s.name) + '<span class="text-muted"> · ' + s.episodes.length + ' 集</span></span>'
+          + '<span class="text-danger">标记删除</span></div>';
+      });
+      $('#md-season-body').html(h || '<div class="md-empty">没有剧集</div>');
+    });
+  };
+
+  window.md_markSeason = function (sid, kind, seasonId, label, title) {
+    var tip = kind === 'series' ? ('整部《' + title + '》') : ('《' + title + '》' + label);
+    if (!confirm('标记 ' + tip + ' 为已看？\n\n会进入删除队列，做种满 72 小时后自动删除种子、源文件与硬链接。')) return;
+    $('#md-season-modal').modal('hide');
+    $.ajax({
+      url: '/cleanup/api/mark', type: 'POST', contentType: 'application/json',
+      data: JSON.stringify({
+        kind: kind, jf_id: kind === 'series' ? sid : seasonId, season_id: seasonId,
+        season_label: kind === 'season' ? label : null, series_id: sid,
+        series_title: title, title: title
+      }),
+      success: function (r) {
+        if (r.code === 0) { toast('已加入删除队列'); md_load('series'); md_summary(); }
+        else { alert(r.msg); }
+      },
+      error: function () { alert('请求失败'); }
+    });
+  };
+
+  function md_queue() {
+    var box = document.getElementById('md-view');
+    box.innerHTML = '<div class="md-empty">加载中…</div>';
+    $.get('/cleanup/api/queue', function (r) {
+      if (r.code !== 0) { box.innerHTML = '<div class="md-empty">' + esc(r.msg) + '</div>'; return; }
+      if (!r.items.length) { box.innerHTML = '<div class="md-empty">队列是空的。去电影/剧集页点封面标记吧。</div>'; return; }
+      var PILL = { waiting: ['wait', '等待做种'], queued: ['wait', '排队中'], ready: ['ready', '即将删除'],
+                   deleting: ['wait', '正在删除'], done: ['done', '已删除'], failed: ['fail', '失败'] };
+      box.innerHTML = r.items.map(function (it) {
+        var p = PILL[it.status] || ['wait', it.status];
+        var name = it.kind === 'season' ? (it.series_title + ' · ' + it.season) : it.title;
+        var extra = it.status === 'waiting' && it.left_hours > 0 ? ('还差 ' + it.left_hours + 'h') :
+                    (it.status === 'done' ? fmt(it.released) : '');
+        var btn = (it.status === 'failed' || it.status === 'deleting') ? ''
+          : '<button class="btn btn-sm" onclick="md_cancel(' + it.id + ')">撤回</button>';
+        return '<div class="md-row">'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:13.5px;font-weight:600" class="text-truncate">' + esc(name) + '</div>'
+          + '<div class="text-muted" style="font-size:11.5px;margin-top:2px">'
+          + fmt(it.size) + ' · ' + it.file_count + ' 文件 · ' + it.torrents + ' 种子 · ' + esc(extra || it.note || '') + '</div>'
+          + '</div><span class="md-pill ' + p[0] + '">' + p[1] + '</span>' + btn + '</div>';
+      }).join('');
+    });
+  }
+
+  window.md_cancel = function (id) {
+    if (!confirm('撤回这条标记？')) return;
+    $.ajax({
+      url: '/cleanup/api/cancel', type: 'POST', contentType: 'application/json',
+      data: JSON.stringify({ id: id }),
+      success: function (r) {
+        if (r.code === 0) { toast('已撤回'); md_queue(); md_summary(); } else { alert(r.msg); }
+      }
+    });
+  };
+
+  window.md_run = function () {
+    $.post('/cleanup/api/run', {}, function (r) {
+      toast(r.code === 0 ? '已触发队列检查' : r.msg);
+      setTimeout(function () { md_summary(); if (state.tab === 'queue') md_queue(); }, 2000);
+    });
+  };
+
+  md_summary();
+  md_load('movie');
+})();
+</script>
