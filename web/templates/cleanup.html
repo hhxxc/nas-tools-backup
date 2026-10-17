@@ -37,7 +37,7 @@
       <div class="col">
         <h2 class="page-title">看后清理</h2>
         <div class="text-muted mt-1" style="font-size:12.5px">
-          标记「看完了」= 进删除队列；做种满 72 小时后自动删掉 qB 种子、源文件与硬链接
+          标记「看完了」= 进删除队列；<b>冷静期 72 小时 + 做种满 72 小时</b>都满足后，才会删掉 qB 种子、源文件与硬链接
         </div>
       </div>
       <div class="col-auto ms-auto">
@@ -152,7 +152,7 @@
   window.md_load = md_load;
 
   window.md_markMovie = function (id, title) {
-    if (!confirm('标记《' + title + '》为已看？\n\n会进入删除队列，做种满 72 小时后自动删除种子、源文件与硬链接。')) return;
+    if (!confirm('标记《' + title + '》为已看？\n\n会进入删除队列：冷静期 72 小时 + 做种满 72 小时后才会真正删除，期间可随时撤回。')) return;
     $.ajax({
       url: '/cleanup/api/mark', type: 'POST', contentType: 'application/json',
       data: JSON.stringify({ kind: 'movie', jf_id: id, title: title }),
@@ -188,7 +188,7 @@
 
   window.md_markSeason = function (sid, kind, seasonId, label, title) {
     var tip = kind === 'series' ? ('整部《' + title + '》') : ('《' + title + '》' + label);
-    if (!confirm('标记 ' + tip + ' 为已看？\n\n会进入删除队列，做种满 72 小时后自动删除种子、源文件与硬链接。')) return;
+    if (!confirm('标记 ' + tip + ' 为已看？\n\n会进入删除队列：冷静期 72 小时 + 做种满 72 小时后才会真正删除，期间可随时撤回。')) return;
     $('#md-season-modal').modal('hide');
     $.ajax({
       url: '/cleanup/api/mark', type: 'POST', contentType: 'application/json',
