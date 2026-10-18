@@ -117,6 +117,10 @@
   </div>
 
   <div class="card">
+    <div class="mediafile-group-bar" id="mf_group_bar">
+      <span>只看 <b id="mf_group_name"></b> 的内容</span>
+      <a href="javascript:clear_group_filter()" class="ms-auto">清除筛选</a>
+    </div>
     <div class="table-responsive">
       <table class="table table-vcenter card-table table-hover table-striped">
         <thead>
@@ -166,6 +170,7 @@
   </td>
   <td>
     <div class="fw-medium mediafile-name" title="{NAME}">{SHORT_NAME}</div>
+    <div class="mediafile-group" title="所属目录">{GROUP}</div>
   </td>
   <td class="text-muted">{FILESIZE}</td>
   <td>
@@ -192,6 +197,25 @@
 
 <script type="text/javascript">
   var mediafile_rows = [];
+
+  // 从「看后清理」点特典徽章跳过来时带着的目录过滤（用 inode 反查出来的种子目录名）
+  var mf_group = [];
+  try {
+    mf_group = JSON.parse(sessionStorage.getItem("mf_group") || "[]") || [];
+  } catch (e) {
+    mf_group = [];
+  }
+  if (mf_group.length) {
+    $("#mf_group_name").text(mf_group.join(" / "));
+    $("#mf_group_bar").css("display", "flex");
+  }
+
+  function clear_group_filter() {
+    mf_group = [];
+    sessionStorage.removeItem("mf_group");
+    $("#mf_group_bar").hide();
+    render_table();
+  }
 
   function str_size(bytes) {
     if (bytes === undefined || bytes === null) {
@@ -268,6 +292,9 @@
       if (lib && !((row.lib || "").indexOf(lib) === 0)) {
         return false;
       }
+      if (mf_group.length && mf_group.indexOf(row.group) === -1) {
+        return false;
+      }
       if (search && (row.name || "").toLowerCase().indexOf(search) === -1
           && (row.lib || "").toLowerCase().indexOf(search) === -1
           && (row.src || "").toLowerCase().indexOf(search) === -1) {
@@ -285,6 +312,7 @@
           template_html.replaceAll("{IDX}", row.idx)
               .replaceAll("{NAME}", esc(row.name))
               .replaceAll("{SHORT_NAME}", esc(shorten(row.name || "", 60)))
+              .replaceAll("{GROUP}", esc(row.group || "—"))
               .replaceAll("{FILESIZE}", str_size(row.size))
               .replaceAll("{LIB}", row.lib
                   ? '<span title="' + esc(row.lib) + '">' + esc(row.lib) + '</span>'

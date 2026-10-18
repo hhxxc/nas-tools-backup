@@ -4414,6 +4414,19 @@ class WebAction:
         return list(dict.fromkeys(lib_roots)), list(dict.fromkeys(src_roots))
 
     @staticmethod
+    def __group_of(path, lib_side=True):
+        """
+        从文件路径推断它所属的剧集/电影目录名（用于页面展示归属）
+        媒体库侧遇到 Season 1 这类季目录要再往上跳一层
+        """
+        if not path:
+            return ""
+        d = os.path.dirname(path)
+        if lib_side and re.match(r'^(season|s)\s*\d+$', os.path.basename(d), re.I):
+            d = os.path.dirname(d)
+        return os.path.basename(d)
+
+    @staticmethod
     def __classify_media_files(lib_roots, src_roots):
         """
         按 inode 合并媒体库与同步来源两侧的文件，给出三态分类
@@ -4433,15 +4446,20 @@ class WebAction:
                     "size": size,
                     "lib": lib_path,
                     "src": "",
-                    "status": "orphan"
+                    "status": "orphan",
+                    "group": WebAction.__group_of(lib_path, True),
+                    "group_src": ""
                 })
             else:
+                src_path = src_entry[0][1]
                 rows.append({
                     "name": os.path.basename(lib_path),
                     "size": size,
                     "lib": lib_path,
-                    "src": src_entry[0][1],
-                    "status": "linked"
+                    "src": src_path,
+                    "status": "linked",
+                    "group": WebAction.__group_of(lib_path, True),
+                    "group_src": WebAction.__group_of(src_path, False)
                 })
         for inode, entries in src_index.items():
             if inode in lib_index:
@@ -4453,7 +4471,9 @@ class WebAction:
                 "size": size,
                 "lib": "",
                 "src": src_path,
-                "status": "unlinked"
+                "status": "unlinked",
+                "group": WebAction.__group_of(src_path, False),
+                "group_src": WebAction.__group_of(src_path, False)
             })
         rows.sort(key=lambda x: (x["status"] != "unlinked", x["status"] != "orphan", -x["size"]))
         for idx, row in enumerate(rows):
@@ -4462,9 +4482,13 @@ class WebAction:
 
     def __get_media_files_index(self, data):
         """
-        媒体库与源文件对照索引
+        媒体库与源文件对照索引（进程内缓存 5 分钟，传 force 可强制重扫）
         """
         try:
+            force = bool((data or {}).get("force"))
+            cached = getattr(self, "_media_index_cache", None)
+            if cached and not force and time.time() - cached.get("ts", 0) < 300:
+                return cached["data"]
             lib_roots, src_roots = self.__get_media_roots()
             rows = self.__classify_media_files(lib_roots, src_roots)
             counts = {"linked": 0, "orphan": 0, "unlinked": 0}
@@ -4473,7 +4497,7 @@ class WebAction:
                 counts[row["status"]] += 1
                 if row["status"] in ("orphan", "unlinked"):
                     reclaimable += row["size"]
-            return {
+            result = {
                 "code": 0,
                 "count": len(rows),
                 "counts": counts,
@@ -4482,9 +4506,41 @@ class WebAction:
                 "src_roots": src_roots,
                 "data": rows
             }
+            self._media_index_cache = {"ts": time.time(), "data": result}
+            return result
         except Exception as e:
             ExceptionUtils.exception_traceback(e)
             return {"code": -1, "msg": "扫描媒体文件失败：%s" % str(e)}
+
+    def get_media_index(self, force=False):
+        """供其它页面复用媒体文件索引（带缓存）"""
+        return self.__get_media_files_index({"force": force})
+
+    def get_series_extras(self, series_path):
+        """
+        某部剧在源侧尚未入库的额外文件（特典 / NCOP / 音乐包等）。
+
+        归属不靠名字猜：先用该剧媒体库侧文件的 inode 反查出同一个种子目录，
+        再把这个目录下「只在源端」的文件算作它的特典。
+        """
+        try:
+            index = self.get_media_index()
+            rows = index.get("data") or []
+            prefix = (series_path or "").rstrip("/") + "/"
+            src_dirs = set()
+            for row in rows:
+                if row.get("lib") and row["lib"].startswith(prefix) and row.get("src"):
+                    src_dirs.add(os.path.dirname(row["src"]))
+            extras = [x for x in rows
+                      if x.get("status") == "unlinked"
+                      and os.path.dirname(x.get("src") or "") in src_dirs]
+            return {
+                "count": len(extras),
+                "size": sum(x.get("size") or 0 for x in extras),
+                "items": extras
+            }
+        except Exception as e:
+            return {"count": 0, "size": 0, "items": [], "msg": str(e)}
 
     def __delete_media_files(self, data):
         """

@@ -15,6 +15,16 @@
   .md-tag.movie { background: #2fb344; }
   .md-tag.series { background: #206bc4; }
   .md-tag.season { background: #8763c6; }
+  .md-extra { position: absolute; top: 7px; right: 7px; border: 0; cursor: pointer;
+    background: rgba(224, 36, 36, .92); color: #fff; font-size: 11px; font-weight: 600;
+    padding: 3px 9px; border-radius: 20px; font-family: inherit; transition: .15s;
+    box-shadow: 0 2px 8px rgba(224, 36, 36, .3); }
+  .md-extra:hover { background: #e02424; transform: scale(1.04); }
+  .md-extra-tip { display: none; align-items: center; gap: 8px; margin: -4px 0 14px;
+    padding: 9px 13px; border-radius: 11px; font-size: 13px;
+    background: rgba(224, 36, 36, .05); border: 1px solid rgba(224, 36, 36, .16); color: #a13131; }
+  .md-extra-tip a { color: #e02424; font-weight: 600; text-decoration: none; }
+  .md-extra-tip a:hover { text-decoration: underline; }
   .md-sheet { border: 0; border-radius: 16px; overflow: hidden; box-shadow: 0 24px 60px rgba(15, 23, 42, .22); background: #fff; }
   .md-sheet-head { position: relative; padding: 20px 22px 16px; border-bottom: 1px solid #eef0f3; background: linear-gradient(180deg, #fbfcfd, #fff); }
   .md-sheet-title { font-size: 17px; font-weight: 600; color: #16202c; line-height: 1.4; padding-right: 34px; }
@@ -94,6 +104,11 @@
     </div>
   </div>
 
+  <div class="md-extra-tip" id="md-extra-tip">
+    <span id="md-extra-text">正在统计特典…</span>
+    <a href="javascript:md_gotoAllExtras()" class="ms-auto">去媒体文件清理 →</a>
+  </div>
+
   <ul class="nav nav-tabs mb-3" id="md-tabs">
     <li class="nav-item"><a href="javascript:md_tab('movie')" class="nav-link active" data-tab="movie">电影</a></li>
     <li class="nav-item"><a href="javascript:md_tab('series')" class="nav-link" data-tab="series">剧集</a></li>
@@ -121,7 +136,7 @@
 
 <script>
 (function () {
-  var state = { tab: 'movie', movies: null, series: null };
+  var state = { tab: 'movie', movies: null, series: null, extras: {} };
 
   function fmt(n) {
     if (n === null || n === undefined || n < 0) return '-';
@@ -167,9 +182,15 @@
     var action = type === 'movie'
       ? 'md_markMovie(\'' + it.jf_id + '\',\'' + esc(it.title).replace(/'/g, "\\'") + '\')'
       : 'md_openSeries(\'' + it.jf_id + '\',\'' + esc(it.title).replace(/'/g, "\\'") + '\')';
+    var ex = (type === 'series') ? state.extras[it.jf_id] : null;
+    var extraBtn = ex
+      ? '<button class="md-extra" title="源侧还有 ' + ex.count + ' 个未入库的特典/花絮，点击去清理"'
+        + ' onclick="event.stopPropagation();md_gotoExtras(\'' + it.jf_id + '\')">特典 ' + fmt(ex.size) + '</button>'
+      : '';
     return '<div class="md-card' + q + '">'
       + '<img class="md-poster" loading="lazy" src="/cleanup/img/' + it.jf_id + '">'
       + '<span class="md-tag ' + type + '">' + (type === 'movie' ? '电影' : '剧集') + '</span>'
+      + extraBtn
       + (it.queued ? '<div class="md-mask">已加入删除队列</div>' : '')
       + '<div class="md-body">'
       + '<div class="md-title">' + esc(it.title) + '</div>'
@@ -189,6 +210,46 @@
     }).fail(function () { box.innerHTML = '<div class="md-empty">请求失败</div>'; });
   }
   window.md_load = md_load;
+
+  // ---- 与「媒体文件」页协同：源侧未入库的特典 ----
+  window.md_gotoExtras = function (sid) {
+    var ex = state.extras[sid];
+    var dirs = (ex && ex.dirs) ? ex.dirs : [];
+    try { sessionStorage.setItem('mf_group', JSON.stringify(dirs)); } catch (e) {}
+    if (typeof navmenu === 'function') { navmenu('mediafiles'); } else { window.location.hash = '#mediafiles'; }
+  };
+
+  window.md_gotoAllExtras = function () {
+    try { sessionStorage.removeItem('mf_group'); } catch (e) {}
+    if (typeof navmenu === 'function') { navmenu('mediafiles'); } else { window.location.hash = '#mediafiles'; }
+  };
+
+  function loadExtras() {
+    $.get('/cleanup/api/extras', function (r) {
+      if (r.code !== 0) {
+        $('#md-extra-text').text('特典统计失败：' + (r.msg || '未知错误'));
+        $('#md-extra-tip').css('display', 'flex');
+        return;
+      }
+      state.extras = r.series || {};
+      var total = 0, cnt = 0, k;
+      for (k in state.extras) {
+        total += state.extras[k].size || 0;
+        cnt += state.extras[k].count || 0;
+      }
+      if (cnt > 0) {
+        $('#md-extra-text').html('源侧还有 <b>' + cnt + '</b> 个未入库的特典/花絮，共 <b>' + fmt(total)
+          + '</b>；媒体文件页合计可释放 <b>' + fmt(r.reclaimable || 0) + '</b>');
+        $('#md-extra-tip').css('display', 'flex');
+        if (state.tab === 'series') md_load('series');
+      } else {
+        $('#md-extra-tip').hide();
+      }
+    }).fail(function () {
+      $('#md-extra-text').text('特典统计还在跑（首次要扫一遍全库，稍后刷新即可）');
+      $('#md-extra-tip').css('display', 'flex');
+    });
+  }
 
   window.md_markMovie = function (id, title) {
     if (!confirm('标记《' + title + '》为已看？\n\n会进入删除队列：冷静期 72 小时 + 做种满 72 小时后才会真正删除，期间可随时撤回。')) return;
@@ -302,5 +363,6 @@
 
   md_summary();
   md_load('movie');
+  setTimeout(loadExtras, 600);
 })();
 </script>

@@ -351,6 +351,57 @@ def cleanup_list():
         return _md_json({"code": 1, "msg": str(e)})
 
 
+@App.route('/cleanup/api/extras', methods=['GET'])
+@login_required
+def cleanup_extras():
+    """
+    每部剧「源侧未入库」的特典/花絮汇总（与「媒体文件」页共用同一份 inode 索引）
+    归属用 inode 反查：不用名字猜，避免中英文目录名对不上
+    """
+    try:
+        m = _md_mod()
+        wa = WebAction()
+        force = request.args.get("force") == "1"
+        index = wa.get_media_index(force=force)
+        rows = index.get("data") or []
+        # 按源目录归组，再按剧的媒体库路径反查对应目录
+        by_series = {}
+        for it in m.list_series():
+            path = (it.get("path") or "").rstrip("/")
+            if not path:
+                continue
+            prefix = path + "/"
+            src_dirs = set()
+            for row in rows:
+                if row.get("lib") and row["lib"].startswith(prefix) and row.get("src"):
+                    src_dirs.add(os.path.dirname(row["src"]))
+            if not src_dirs:
+                continue
+            cnt, size = 0, 0
+            for row in rows:
+                if row.get("status") != "unlinked":
+                    continue
+                if os.path.dirname(row.get("src") or "") in src_dirs:
+                    cnt += 1
+                    size += row.get("size") or 0
+            if cnt:
+                by_series[it["jf_id"]] = {
+                    "count": cnt,
+                    "size": size,
+                    "name": it.get("title"),
+                    "dirs": sorted(os.path.basename(d) for d in src_dirs)
+                }
+        return _md_json({
+            "code": 0,
+            "series": by_series,
+            "reclaimable": index.get("reclaimable_size") or 0,
+            "counts": index.get("counts") or {},
+            "scanned_at": index.get("_ts") or ""
+        })
+    except Exception as e:
+        return _md_json({"code": 1, "msg": str(e)})
+
+
 @App.route('/cleanup/api/seasons', methods=['GET'])
 @login_required
 def cleanup_seasons():
