@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 from datetime import datetime
 
 import pytz
@@ -160,6 +161,33 @@ class BrushTask(object):
             return {}
         return rule if isinstance(rule, dict) else {}
 
+    @staticmethod
+    def __rss_key(enclosure):
+        """
+        RSS 种子链接的去重键
+
+        MT 等站点的 RSS 直链里带 sign / t 这类每次刷新都会变的签名参数，
+        直接用完整 URL 去重会完全失效——同一部片子每个刷新周期都被当成新种子
+        重复提交给下载器、重复写入刷流记录，把「保种体积」虚撑到上限，
+        导致刷流任务此后拒绝新增任何下载。
+        这里剔除易变参数，只保留域名、路径和稳定参数（如 MT 的 tid）。
+        """
+        if not enclosure:
+            return ""
+        try:
+            parsed = urllib.parse.urlparse(enclosure)
+            query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+            volatile = {"sign", "signed", "t", "ts", "timestamp", "expire", "expires",
+                        "token", "auth", "authkey", "passkey"}
+            stable = sorted((k, v) for k, v in query if k.lower() not in volatile)
+            if not stable:
+                # 站点全靠签名参数区分种子，退回完整链接，宁可不合并也不能误杀
+                return enclosure
+            key = (parsed.netloc or "") + (parsed.path or "")
+            return key + "?" + urllib.parse.urlencode(stable)
+        except Exception:
+            return enclosure
+
     def get_brushtask_info(self, taskid=None):
         """
         读取刷流任务列表
@@ -266,7 +294,7 @@ class BrushTask(object):
                 # 发布时间
                 pubdate = res.get('pubdate')
 
-                if enclosure in self._torrents_cache:
+                if self.__rss_key(enclosure) in self._torrents_cache:
                     log.debug("【Brush】%s 已处理过" % torrent_name)
                     continue
 
@@ -315,7 +343,7 @@ class BrushTask(object):
                                                        current_site_dlcount=current_site_dlcount,
                                                        site_info=site_info):
                         break
-                    self._torrents_cache.append(enclosure)
+                    self._torrents_cache.append(self.__rss_key(enclosure))
             except Exception as err:
                 ExceptionUtils.exception_traceback(err)
                 continue

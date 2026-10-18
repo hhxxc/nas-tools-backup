@@ -1,0 +1,80 @@
+{
+  "name": "江苏预防接种 · 儿童分时预约",
+
+  "_怎么填": "request 段用 curl2config.py 自动生成，不用手填；detect 段跑完 --once 后照返回结构改。",
+
+  "request": {
+    "method": "POST",
+    "url": "https://占位-请用 curl2config.py 覆盖此文件",
+    "headers": {
+      "token": "抓包得到的 token",
+      "Cookie": "抓包得到的 Cookie",
+      "Content-Type": "application/json;charset=UTF-8"
+    },
+    "params": {},
+    "body": {}
+  },
+
+  "detect": {
+    "type": "list_field_eq",
+    "path": "data.list",
+    "field": "status",
+    "value": "1",
+    "message_template": "{name} 有分时预约号了！请立刻打开江苏预防接种 APP 预约。（{time}）"
+  },
+
+  "context": {},
+
+  "token_expired": {
+    "keywords": ["登录超时", "请重新登录", "未登录", "会话过期", "token失效", "invalid token", "登录已失效"],
+    "code_values": ["9999", "401", "-1"],
+    "code_paths": ["code"]
+  },
+
+  "interval_seconds": 60,
+  "renotify_cooldown_seconds": 1800,
+  "quiet_hours": ["23:00", "07:00"],
+
+  "notify": {
+    "bark": { "enabled": false, "url": "https://api.day.app/你的KEY" },
+    "serverchan": { "enabled": false, "sendkey": "" },
+    "pushplus": { "enabled": false, "token": "" },
+    "wecom": { "enabled": false, "webhook": "" },
+    "dingtalk": { "enabled": false, "webhook": "", "secret": "" },
+
+    "email": {
+      "enabled": true,
+      "smtp_host": "smtp.qq.com",
+      "smtp_port": 465,
+      "sender": "你的QQ邮箱@qq.com",
+      "password": "QQ邮箱授权码16位（不是登录密码）",
+      "receivers": ["你收信的邮箱@qq.com"]
+    },
+
+    "sound": { "enabled": true }
+  },
+
+  "reminders": {
+    "enabled": true,
+    "window_seconds": 180,
+    "items": [
+      {
+        "desc": "周一~周五 08:00 疫苗放号",
+        "days": ["mon", "tue", "wed", "thu", "fri"],
+        "time": "08:00",
+        "title": "[该预约了] 儿童疫苗接种号",
+        "body": "现在打开「江苏预防接种」APP（或微信里的育苗通小程序）→ 儿童预防接种分时预约，选好门诊和日期提交。放号后余号消失很快，早点进。"
+      },
+      {
+        "desc": "周六 08:00 补号",
+        "days": ["sat"],
+        "time": "08:00",
+        "title": "[该预约了] 儿童疫苗接种号（周六）",
+        "body": "打开江苏预防接种 APP，看看有没有新放出来的分时预约号。"
+      }
+    ]
+  },
+
+  "log_file": "monitor.log",
+  "state_file": "state.json"
+}

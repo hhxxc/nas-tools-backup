@@ -1838,7 +1838,7 @@ class DbHelper:
         """
         if not brush_id:
             return
-        if self.is_brushtask_torrent_exists(brush_id, title, enclosure):
+        if self.is_brushtask_torrent_exists(brush_id, title, enclosure, download_id):
             return
         self._db.insert(SITEBRUSHTORRENTS(
             TASK_ID=brush_id,
@@ -1873,12 +1873,21 @@ class DbHelper:
             return None
         return self._db.query(SITEBRUSHTORRENTS).filter(SITEBRUSHTORRENTS.ENCLOSURE == enclosure).first()
 
-    def is_brushtask_torrent_exists(self, brush_id, title, enclosure):
+    def is_brushtask_torrent_exists(self, brush_id, title, enclosure, download_id=None):
         """
         查询刷流任务种子是否已存在
+
+        优先按下载器返回的种子 ID（hash）判重：RSS 链接里的 sign/t 参数每次刷新都会变，
+        只比对链接会让同一个种子反复入库，重复计入保种体积，最终把刷流任务卡死。
         """
         if not brush_id:
             return False
+        if download_id and str(download_id) != "0":
+            count = self._db.query(SITEBRUSHTORRENTS).filter(
+                SITEBRUSHTORRENTS.TASK_ID == brush_id,
+                SITEBRUSHTORRENTS.DOWNLOAD_ID == str(download_id)).count()
+            if count > 0:
+                return True
         count = self._db.query(SITEBRUSHTORRENTS).filter(SITEBRUSHTORRENTS.TASK_ID == brush_id,
                                                          SITEBRUSHTORRENTS.TORRENT_NAME == title,
                                                          SITEBRUSHTORRENTS.ENCLOSURE == enclosure).count()

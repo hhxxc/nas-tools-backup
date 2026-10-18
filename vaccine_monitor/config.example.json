@@ -1,0 +1,57 @@
+{
+  "_说明": "把本文件复制为 config.json 后按 README 填写。所有未用的通知通道保持 enabled=false。",
+
+  "name": "江苏预防接种 · XX门诊 HPV九价",
+
+  "request": {
+    "method": "POST",
+    "url": "https://抓包得到的接口地址",
+    "headers": {
+      "token": "抓包得到的 token",
+      "Cookie": "抓包得到的 Cookie",
+      "Content-Type": "application/json;charset=UTF-8"
+    },
+    "params": {},
+    "body": {}
+  },
+
+  "detect": {
+    "type": "list_field_eq",
+    "path": "data.list",
+    "field": "status",
+    "value": "1",
+    "message_template": "{name} 有号了！请立刻打开江苏预防接种 APP 预约。（{time}）"
+  },
+
+  "context": {},
+
+  "token_expired": {
+    "keywords": ["登录超时", "请重新登录", "未登录", "会话过期", "token失效", "invalid token"],
+    "code_values": ["9999", "401", "-1"],
+    "code_paths": ["code"]
+  },
+
+  "interval_seconds": 60,
+  "renotify_cooldown_seconds": 1800,
+  "quiet_hours": ["23:00", "07:00"],
+
+  "notify": {
+    "bark": { "enabled": false, "url": "https://api.day.app/你的KEY" },
+    "serverchan": { "enabled": false, "sendkey": "SCTxxxxxxxx" },
+    "pushplus": { "enabled": false, "token": "" },
+    "wecom": { "enabled": false, "webhook": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" },
+    "dingtalk": { "enabled": false, "webhook": "", "secret": "" },
+    "email": {
+      "enabled": false,
+      "smtp_host": "smtp.qq.com",
+      "smtp_port": 465,
+      "sender": "you@qq.com",
+      "password": "邮箱授权码不是登录密码",
+      "receivers": ["you@qq.com"]
+    },
+    "sound": { "enabled": true }
+  },
+
+  "log_file": "monitor.log",
+  "state_file": "state.json"
+}
