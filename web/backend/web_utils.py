@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 
 import cn2an
@@ -90,14 +91,40 @@ class WebUtils:
             # 支持自动识别类型
             if not mtype:
                 mtype = MediaType.TV if info.get("episodes_count") else MediaType.MOVIE
-            if original_title:
-                media_info = Media().get_media_info(title=f"{original_title} {year}",
-                                                    mtype=mtype,
-                                                    append_to_response="all")
-            if not media_info or not media_info.tmdb_info:
-                media_info = Media().get_media_info(title=f"{title} {year}",
-                                                    mtype=mtype,
-                                                    append_to_response="all")
+            # 豆瓣把分季条目命名成 "The Walking Dead: Daryl Dixon Season 4"、
+            # "行尸走肉：达里尔·迪克森 第四季" 这种，季号后缀会污染 TMDB 搜索词，
+            # 且此时 year 是「该季年份」而非首播年，两者都会导致错配
+            # （例如 The Walking Dead: Daryl Dixon 被误配成 Walking with Monsters 或
+            # 同名谈话节目）。这里对分季条目：剥掉季号后缀、丢弃 year，并优先用中文名
+            # 搜索（英文名 "The Walking Dead: Daryl Dixon" 在 TMDB 里噪声太大）。
+            def _clean_douban_title(t):
+                t = str(t or "")
+                has_season = bool(re.search(r'(?i)season\s*\d+|第[一二三四五六七八九十百\d]+季', t))
+                t = re.sub(r'(?i)\s*season\s*\d+', '', t)
+                t = re.sub(r'\s*第[一二三四五六七八九十百\d]+季', '', t)
+                return t.strip(), has_season
+
+            ot, ot_season = _clean_douban_title(original_title)
+            tt, tt_season = _clean_douban_title(title)
+            if ot_season or tt_season:
+                # 分季条目：清洗后的纯标题，优先中文名
+                if tt:
+                    media_info = Media().get_media_info(title=tt, mtype=mtype,
+                                                        append_to_response="all")
+                if not media_info or not media_info.tmdb_info:
+                    if ot:
+                        media_info = Media().get_media_info(title=ot, mtype=mtype,
+                                                            append_to_response="all")
+            else:
+                # 普通条目：维持原逻辑（先英文原名带年份，再中文名带年份）
+                if original_title:
+                    media_info = Media().get_media_info(title=f"{original_title} {year}",
+                                                        mtype=mtype,
+                                                        append_to_response="all")
+                if not media_info or not media_info.tmdb_info:
+                    media_info = Media().get_media_info(title=f"{title} {year}",
+                                                        mtype=mtype,
+                                                        append_to_response="all")
             media_info.douban_id = doubanid
         elif str(mediaid).startswith("BG:"):
             # BANGUMI
