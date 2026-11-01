@@ -259,6 +259,23 @@
         .replaceAll("'", "&#39;");
   }
 
+  // 点击路径列：跳到「文件管理」页，定位到该文件所在目录
+  function open_in_filemanager(path) {
+    if (!path) {
+      return;
+    }
+    // 取父目录（文件管理页的目录树是目录粒度）
+    var dir = path.replace(/\\/g, "/");
+    var idx = dir.lastIndexOf("/");
+    if (idx >= 0 && idx < dir.length - 1) {
+      dir = dir.substring(0, idx);
+    }
+    if (!dir) {
+      dir = "/";
+    }
+    navmenu("mediafile?dir=" + encodeURIComponent(dir));
+  }
+
   function refresh_index() {
     $("#mediafile_table_count").text("扫描中，请稍候...");
     ajax_post("get_media_files_index", {}, function (ret) {
@@ -315,10 +332,12 @@
               .replaceAll("{GROUP}", esc(row.group || "—"))
               .replaceAll("{FILESIZE}", str_size(row.size))
               .replaceAll("{LIB}", row.lib
-                  ? '<span title="' + esc(row.lib) + '">' + esc(row.lib) + '</span>'
+                  ? '<a href="javascript:void(0)" class="mediafile-path-link" '
+                    + 'data-jump-dir="' + esc(row.lib) + '" title="点击在文件管理中查看">' + esc(row.lib) + '</a>'
                   : '<span class="mediafile-path-empty">—</span>')
               .replaceAll("{SRC}", row.src
-                  ? '<span title="' + esc(row.src) + '">' + esc(row.src) + '</span>'
+                  ? '<a href="javascript:void(0)" class="mediafile-path-link" '
+                    + 'data-jump-dir="' + esc(row.src) + '" title="点击在文件管理中查看">' + esc(row.src) + '</a>'
                   : '<span class="mediafile-path-empty">—</span>')
               .replaceAll("{STATUS_BADGE}", status_badge(row.status))
       );
@@ -429,6 +448,12 @@
   function single_delete(idx, flag) {
     do_delete([idx], flag);
   }
+
+  // 路径列点击 → 文件管理页定位（事件委托，避免每条拼内联 javascript:）
+  $(document).off("click.mfpath").on("click.mfpath", "#mediafile_table_body .mediafile-path-link", function () {
+    var dir = $(this).attr("data-jump-dir");
+    open_in_filemanager(dir);
+  });
 
   refresh_index();
 </script>

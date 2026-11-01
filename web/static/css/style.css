@@ -769,6 +769,18 @@ LI.directory a.selected {
     font-style: italic;
 }
 
+/* 路径列可点击，跳转到文件管理定位 */
+.mediafile-path-link {
+    color: var(--tblr-secondary);
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.mediafile-path-link:hover {
+    color: var(--tblr-primary);
+    text-decoration: underline;
+}
+
 /* 文件所属剧集/电影目录 */
 .mediafile-group {
     font-size: 0.72rem;
